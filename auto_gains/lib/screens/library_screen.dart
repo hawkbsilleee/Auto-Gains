@@ -5,6 +5,7 @@ import '../models/exercise.dart';
 import '../data/exercise_library.dart';
 import '../services/rep_detector.dart';
 import 'active_workout_screen.dart';
+import 'workout_detection_screen.dart';
 
 class LibraryScreen extends StatefulWidget {
   const LibraryScreen({super.key});
@@ -17,6 +18,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
   MuscleGroup? _selectedGroup;
   final Set<Exercise> _selected = {};
   DetectionMode _detectionMode = DetectionMode.simulation;
+  bool _autoDetectSelected = false;
 
   List<Exercise> get _filtered {
     if (_selectedGroup == null) return exerciseLibrary;
@@ -39,7 +41,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
           Expanded(child: _buildExerciseList()),
         ],
       ),
-      bottomNavigationBar: _selected.isNotEmpty ? _buildBottomBar() : null,
+      bottomNavigationBar: (_selected.isNotEmpty || _autoDetectSelected)
+          ? _buildBottomBar()
+          : null,
     );
   }
 
@@ -98,15 +102,17 @@ class _LibraryScreenState extends State<LibraryScreen> {
   Widget _buildExerciseList() {
     return ListView.builder(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      itemCount: _filtered.length,
+      itemCount: 1 + _filtered.length,
       itemBuilder: (context, index) {
-        final exercise = _filtered[index];
+        if (index == 0) return _buildAutoDetectTile();
+        final exercise = _filtered[index - 1];
         final isSelected = _selected.contains(exercise);
         return Padding(
           padding: const EdgeInsets.only(bottom: 8),
           child: GestureDetector(
             onTap: () {
               setState(() {
+                _autoDetectSelected = false;
                 if (isSelected) {
                   _selected.remove(exercise);
                 } else {
@@ -195,7 +201,132 @@ class _LibraryScreenState extends State<LibraryScreen> {
     );
   }
 
+  Widget _buildAutoDetectTile() {
+    final isSelected = _autoDetectSelected;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: GestureDetector(
+        onTap: () {
+          setState(() {
+            _autoDetectSelected = !_autoDetectSelected;
+            if (_autoDetectSelected) _selected.clear();
+          });
+        },
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: isSelected
+                ? AppColors.accent.withValues(alpha: 0.12)
+                : AppColors.surface,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: isSelected
+                  ? AppColors.accent.withValues(alpha: 0.6)
+                  : AppColors.border,
+              width: isSelected ? 1.5 : 0.5,
+            ),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: AppColors.accent.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(
+                  Icons.auto_awesome,
+                  color: AppColors.accent,
+                  size: 22,
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Automatic workout detection',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Do a few reps — we\'ll detect shoulders or biceps and track reps.',
+                      style: const TextStyle(
+                        fontSize: 13,
+                        color: AppColors.textTertiary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (isSelected)
+                Container(
+                  width: 26,
+                  height: 26,
+                  decoration: const BoxDecoration(
+                    color: AppColors.accent,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.check, size: 16, color: Colors.white),
+                )
+              else
+                Container(
+                  width: 26,
+                  height: 26,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(color: AppColors.border, width: 1.5),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildBottomBar() {
+    if (_autoDetectSelected) {
+      return SafeArea(
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: const BoxDecoration(
+            color: AppColors.background,
+            border: Border(top: BorderSide(color: AppColors.border, width: 0.5)),
+          ),
+          child: SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const WorkoutDetectionScreen(),
+                  ),
+                );
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.accent,
+                foregroundColor: AppColors.background,
+              ),
+              child: Text(
+                'Begin (auto-detect)',
+                style: GoogleFonts.inter(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
     return SafeArea(
       child: Container(
         padding: const EdgeInsets.all(16),

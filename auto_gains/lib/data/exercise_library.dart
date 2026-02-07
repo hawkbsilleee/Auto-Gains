@@ -147,3 +147,20 @@ Map<MuscleGroup, List<Exercise>> get exercisesByMuscle {
   }
   return map;
 }
+
+/// Map classifier output (shoulder_press, bicep_curl) to an Exercise for auto-detect flow.
+Exercise? exerciseFromClassifierLabel(String label) {
+  final id = _classifierLabelToExerciseId[label];
+  if (id == null) return null;
+  try {
+    return exerciseLibrary.firstWhere((e) => e.id == id);
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Classifier returns shoulder_press | bicep_curl; we map to library exercise id.
+const Map<String, String> _classifierLabelToExerciseId = {
+  'shoulder_press': 'overhead_press',
+  'bicep_curl': 'bicep_curl',
+};
