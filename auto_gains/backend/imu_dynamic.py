@@ -274,6 +274,15 @@ class StreamingPipeline:
             baseline_window=baseline_window
         )
 
+        # Speed tracking for tempo guide
+        self.prev_smooth = None
+        self.speed_smoother = StreamingSmoother(alpha=0.20)
+        # Heuristic optimal rates (units/sample at ~100Hz)
+        # Concentric (lifting): ~1.5-2.5s for ~30 units amplitude → ~0.15/sample
+        # Eccentric (lowering): ~2-3s, slower and controlled → ~0.10/sample
+        self.optimal_concentric_rate = 0.15
+        self.optimal_eccentric_rate = 0.10
+
         # Store raw + intermediate signals for visualization
         self.raw_history = []
         self.pc1_raw_history = []
@@ -307,6 +316,32 @@ class StreamingPipeline:
 
         # Step 3: Rep detection
         result = self.counter.process_sample(pc1_smooth, sample_idx)
+
+        # Step 4: Speed / tempo tracking
+        speed_deviation = 0.0
+        phase = 'concentric'
+
+        if self.prev_smooth is not None:
+            raw_derivative = pc1_smooth - self.prev_smooth
+            smooth_derivative = self.speed_smoother.update(raw_derivative)
+
+            state = result['state']
+            if state == 'WAITING_FOR_PEAK':
+                phase = 'concentric'
+                optimal = self.optimal_concentric_rate
+                speed_deviation = (smooth_derivative - optimal) / optimal
+            else:
+                phase = 'eccentric'
+                descent_speed = -smooth_derivative  # positive value
+                optimal = self.optimal_eccentric_rate
+                speed_deviation = (descent_speed - optimal) / optimal
+
+            speed_deviation = max(-1.0, min(1.0, speed_deviation))
+
+        self.prev_smooth = pc1_smooth
+
+        result['speed_deviation'] = speed_deviation
+        result['phase'] = phase
 
         return result
 

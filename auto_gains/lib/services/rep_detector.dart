@@ -36,6 +36,9 @@ class RepDetector {
   Stream<ArduinoConnectionState>? get connectionState =>
       _arduinoService?.connectionState;
 
+  /// Speed deviation stream from backend (arduino mode only).
+  Stream<double>? get speedStream => _arduinoService?.speedStream;
+
   RepDetector({
     this.mode = DetectionMode.simulation,
     this.wsUrl = kBackendWsUrl,
