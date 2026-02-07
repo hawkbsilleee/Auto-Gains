@@ -10,14 +10,14 @@ class PaceTimeline extends StatelessWidget {
 
   static Color _colorForDeviation(double deviation) {
     final abs = deviation.abs();
-    if (abs < 0.12) return AppColors.primary;
-    if (abs < 0.35) return AppColors.accent;
+    if (abs < 0.45) return AppColors.primary;  // Match speed guide Perfect threshold
+    if (abs < 0.70) return AppColors.accent;   // Match speed guide Good threshold
     return AppColors.error;
   }
 
   double get goodPacePercent {
     if (paceHistory.isEmpty) return 0.0;
-    final good = paceHistory.where((d) => d.abs() < 0.12).length;
+    final good = paceHistory.where((d) => d.abs() < 0.45).length;  // Updated to match
     return good / paceHistory.length;
   }
 

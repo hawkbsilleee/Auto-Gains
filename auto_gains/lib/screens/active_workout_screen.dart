@@ -13,10 +13,12 @@ import '../services/workout_store.dart';
 import 'workout_summary_screen.dart';
 import '../widgets/speed_guide.dart';
 import '../widgets/pace_timeline.dart';
+import '../widgets/weight_input_dialog.dart';
 
 // Configurable rest timer settings
-const Duration kMaxRestDuration = Duration(seconds: 10);
-const Duration kRestCheckInterval = Duration(seconds: 5);
+const Duration kSetCompletionDuration = Duration(seconds: 10); // Time before set ends
+const Duration kMaxRestDuration = Duration(seconds: 120); // Time before rest warning
+const Duration kRestCheckInterval = Duration(seconds: 1); // Check frequently
 
 const _autoDetectPlaceholder = Exercise(
   id: 'auto_detect',
@@ -56,6 +58,7 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
   int _currentExerciseIndex = 0;
   int _setRepCount = 0;
   double _speedDeviation = 0;
+  double? _currentWeight; // Current weight for the set
 
   // Pace tracking
   final List<double> _paceHistory = [];
@@ -170,14 +173,51 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
       setNumber: 1,
     );
 
-    if (widget.autoDetect) {
-      // Skip countdown for auto-detect — user is already exercising
-      _countdownValue = 0;
-      _startExercise();
-      _startTimer();
-    } else {
-      _startCountdown();
-    }
+    // Schedule weight dialog to show after first frame
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (widget.autoDetect) {
+        _promptForWeightThenAutoDetect();
+      } else {
+        _promptForWeightThenStart();
+      }
+    });
+  }
+
+  Future<void> _promptForWeightThenAutoDetect() async {
+    // Show weight input dialog
+    final weight = await showDialog<double?>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => WeightInputDialog(
+        exerciseName: 'Auto-Detect Workout',
+        previousWeight: _currentWeight,
+      ),
+    );
+
+    if (!mounted) return;
+
+    _currentWeight = weight;
+    // Skip countdown for auto-detect — user is already exercising
+    _countdownValue = 0;
+    _startExercise();
+    _startTimer();
+  }
+
+  Future<void> _promptForWeightThenStart() async {
+    // Show weight input dialog
+    final weight = await showDialog<double?>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => WeightInputDialog(
+        exerciseName: _exercises[_currentExerciseIndex].name,
+        previousWeight: _currentWeight,
+      ),
+    );
+
+    if (!mounted) return;
+
+    _currentWeight = weight;
+    _startCountdown();
   }
 
   void _startCountdown() {
@@ -208,7 +248,19 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
 
   void _startRestCheckTimer() {
     _restCheckTimer = Timer.periodic(kRestCheckInterval, (_) {
-      // Use the most recent activity time (either last set completion or last rep)
+      if (_lastRepTime == null) return;
+
+      final timeSinceLastRep = DateTime.now().difference(_lastRepTime!);
+
+      // First check: Has enough time passed to end the set?
+      if (timeSinceLastRep >= kSetCompletionDuration &&
+          _currentSet.reps.isNotEmpty &&
+          _lastSetCompletionTime == null) {
+        // End the current set
+        _completeCurrentSet();
+      }
+
+      // Second check: Has rest been too long? (show warning)
       final lastActivityTime = _lastSetCompletionTime ?? _lastRepTime;
       if (lastActivityTime != null) {
         final restDuration = DateTime.now().difference(lastActivityTime);
@@ -260,6 +312,7 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
       exercise: _exercises[_currentExerciseIndex],
       startTime: DateTime.now(),
       setNumber: setsForExercise + 1,
+      weight: _currentWeight,
     );
 
     _repDetector.start();
@@ -289,7 +342,11 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
     // Subscribe to set detection stream (arduino mode only)
     final setStream = _repDetector.setDetectedStream;
     if (setStream != null) {
+      print('[flutter] Subscribing to set boundary stream...');
       _setDetectedSub = setStream.listen(_onSetBoundary);
+      print('[flutter] Set boundary subscription active!');
+    } else {
+      print('[flutter] WARNING: setDetectedStream is null - not subscribing!');
     }
   }
 
@@ -299,8 +356,9 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
     setState(() {
       _setRepCount++;
       _currentSet.reps.add(rep);
-      // Track last rep time for rest timer
+      // Track last rep time for rest timer and set completion
       _lastRepTime = DateTime.now();
+      _lastSetCompletionTime = null; // Reset so we can detect next set completion
       _showRestWarning = false; // Dismiss warning when user resumes activity
     });
     _pulseController.forward().then((_) {
@@ -308,9 +366,8 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
     });
   }
 
-  void _onSetBoundary(int repCountAtBoundary) {
-    if (!mounted) return;
-    if (_currentSet.reps.isEmpty) return;
+  void _completeCurrentSet() {
+    if (!mounted || _currentSet.reps.isEmpty) return;
 
     final completedSetNumber = _currentSet.setNumber;
     final completedReps = _currentSet.reps.length;
@@ -338,6 +395,7 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
         exercise: _exercises[_currentExerciseIndex],
         startTime: DateTime.now(),
         setNumber: setsForExercise + 1,
+        weight: _currentWeight,
       );
       _setRepCount = 0;
     });
@@ -350,7 +408,7 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Set $completedSetNumber complete \u2014 $completedReps reps',
+            'Set $completedSetNumber complete — $completedReps reps',
             style: GoogleFonts.inter(
               fontWeight: FontWeight.w600,
               color: AppColors.background,
@@ -364,6 +422,11 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
         ),
       );
     }
+  }
+
+  void _onSetBoundary(int repCountAtBoundary) {
+    // Backend-triggered set boundary (if using Arduino mode with backend detection)
+    _completeCurrentSet();
   }
 
   void _finishWorkout() {
@@ -387,6 +450,39 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
         builder: (_) => WorkoutSummaryScreen(session: _session),
       ),
     );
+  }
+
+  Future<void> _editWeight() async {
+    final newWeight = await showDialog<double?>(
+      context: context,
+      builder: (context) => WeightInputDialog(
+        exerciseName: _exercises[_currentExerciseIndex].name,
+        previousWeight: _currentWeight,
+      ),
+    );
+
+    if (!mounted) return;
+
+    if (newWeight != null) {
+      setState(() {
+        _currentWeight = newWeight;
+        // Save existing reps and pace data
+        final existingReps = List<RepData>.from(_currentSet.reps);
+        final existingPace = List<double>.from(_currentSet.paceDeviations);
+
+        // Create new set with updated weight
+        _currentSet = WorkoutSet(
+          exercise: _currentSet.exercise,
+          startTime: _currentSet.startTime,
+          setNumber: _currentSet.setNumber,
+          weight: newWeight,
+        );
+
+        // Restore the existing reps and pace data
+        _currentSet.reps.addAll(existingReps);
+        _currentSet.paceDeviations.addAll(existingPace);
+      });
+    }
   }
 
   void _confirmEnd() {
@@ -501,15 +597,54 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
                               ),
                             ),
                           const SizedBox(height: 2),
-                          Text(
-                            'Set ${_currentSet.setNumber}',
-                            style: TextStyle(
-                              fontSize: 15,
-                              color: _isAutoDetecting
-                                  ? AppColors.textSecondary
-                                  : exercise.primaryMuscle.color,
-                              fontWeight: FontWeight.w600,
-                            ),
+                          Row(
+                            children: [
+                              Text(
+                                'Set ${_currentSet.setNumber}',
+                                style: TextStyle(
+                                  fontSize: 15,
+                                  color: _isAutoDetecting
+                                      ? AppColors.textSecondary
+                                      : exercise.primaryMuscle.color,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              if (_currentWeight != null) ...[
+                                const SizedBox(width: 8),
+                                GestureDetector(
+                                  onTap: _editWeight,
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                      vertical: 2,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: AppColors.primary.withValues(alpha: 0.15),
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text(
+                                          '${_currentWeight!.toStringAsFixed(0)} lbs',
+                                          style: const TextStyle(
+                                            fontSize: 12,
+                                            color: AppColors.primary,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 4),
+                                        const Icon(
+                                          Icons.edit,
+                                          size: 12,
+                                          color: AppColors.primary,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ],
                           ),
                         ],
                       ),

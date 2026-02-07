@@ -143,8 +143,12 @@ class ArduinoService {
 
         case 'set_boundary':
           final repCount = (data['rep_count'] as num?)?.toInt() ?? 0;
+          print('[flutter] WS received SET BOUNDARY message: repCount=$repCount');
           if (!_setBoundaryController.isClosed) {
             _setBoundaryController.add(repCount);
+            print('[flutter] Set boundary forwarded to stream');
+          } else {
+            print('[flutter] WARNING: Set boundary controller is closed!');
           }
           break;
 

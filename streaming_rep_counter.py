@@ -274,33 +274,6 @@ class StreamingPipeline:
             baseline_window=baseline_window
         )
 
-        # Speed tracking - simple rolling average approach
-        self.prev_smooth = None
-        self.speed_window = []  # Store last N speed samples
-        self.speed_window_size = 60  # Rolling window of 60 samples (~0.6 sec at 100Hz) - increased for more stability
-        self.perfect_speed = 3.1  # Target average speed (tune this based on what feels right)
-        self.dead_zone = 0.20  # Deviations within ±20% are considered "perfect" (mapped to 0)
-
-        # Activity detection for automatic set boundaries
-        self._activity_buffer = []          # Rolling window of |PC1 derivative|
-        self._activity_window = 100         # ~1 sec at 100Hz
-        self._activity_threshold = 0.05     # Min mean(|derivative|) to consider "active"
-        self._is_active = False
-        self._was_active = False
-        self._idle_counter = 0
-        self._idle_threshold = 300          # 3 sec at 100Hz -> set boundary
-        self._set_boundary_detected = False
-        self._ever_active = False           # Prevents false boundary at start
-        self._set_boundary_emitted = False  # Prevents re-firing until next activity
-        # Debounce: require sustained state change before flipping _is_active
-        self._active_debounce = 0
-        self._active_debounce_threshold = 25  # ~0.25 sec at 100Hz
-
-        # Time-based set boundary detection (more reliable than activity-based)
-        self._last_rep_sample = None        # Sample index of last rep
-        self._set_boundary_time_threshold = 400  # 4 sec at 100Hz -> set boundary
-        self._has_reps = False              # Track if any reps have been detected
-
         # Store raw + intermediate signals for visualization
         self.raw_history = []
         self.pc1_raw_history = []
@@ -335,109 +308,6 @@ class StreamingPipeline:
         # Step 3: Rep detection
         result = self.counter.process_sample(pc1_smooth, sample_idx)
 
-        # Track rep detection for time-based set boundary
-        if result['rep_detected']:
-            self._last_rep_sample = sample_idx
-            self._has_reps = True
-            self._set_boundary_emitted = False  # Allow new set boundary after a rep
-
-        # Step 4: Speed tracking - simple rolling average
-        speed_deviation = 0.0
-
-        if self.prev_smooth is not None:
-            # Calculate speed: how much signal changed this sample
-            actual_speed = abs(pc1_smooth - self.prev_smooth)
-
-            # Add to rolling window
-            self.speed_window.append(actual_speed)
-            if len(self.speed_window) > self.speed_window_size:
-                self.speed_window.pop(0)
-
-            # Calculate rolling average (need at least 10 samples)
-            if len(self.speed_window) >= 10:
-                rolling_avg = sum(self.speed_window) / len(self.speed_window)
-
-                # Compare to perfect speed
-                # Positive = too fast, negative = too slow
-                speed_deviation = (rolling_avg - self.perfect_speed) / self.perfect_speed
-
-                # Apply dead zone - if within ±dead_zone, treat as perfect (0)
-                if abs(speed_deviation) < self.dead_zone:
-                    speed_deviation = 0.0
-                else:
-                    # Scale down so dead zone edges map to 0
-                    # e.g., if dead_zone=0.2 and deviation=0.3, output = (0.3-0.2)/(1-0.2) = 0.125
-                    sign = 1.0 if speed_deviation > 0 else -1.0
-                    speed_deviation = sign * (abs(speed_deviation) - self.dead_zone) / (1.0 - self.dead_zone)
-
-                # Clamp to [-1, 1]
-                speed_deviation = max(-1.0, min(1.0, speed_deviation))
-
-                # Debug logging every 100 samples
-                if sample_idx % 100 == 0:
-                    print(f"[speed] sample={sample_idx}, actual_speed={actual_speed:.3f}, rolling_avg={rolling_avg:.3f}, deviation={speed_deviation:.3f}")
-
-        self.prev_smooth = pc1_smooth
-        result['speed_deviation'] = speed_deviation
-        result['phase'] = 'concentric'
-
-        # Step 5: Time-based set boundary detection (primary method)
-        # This is more reliable than activity-based detection
-        self._set_boundary_detected = False
-        if (self._has_reps and
-            self._last_rep_sample is not None and
-            not self._set_boundary_emitted):
-            samples_since_last_rep = sample_idx - self._last_rep_sample
-            if samples_since_last_rep >= self._set_boundary_time_threshold:
-                self._set_boundary_detected = True
-                self._set_boundary_emitted = True
-                print(f"[pipeline] Time-based set boundary: {samples_since_last_rep} samples since last rep")
-
-        # Step 6: Activity detection (backup/fallback method)
-        # Keep this as secondary detection for future use, but don't override time-based detection
-        if self.prev_smooth is not None and len(self.pc1_smooth_history) >= 2:
-            abs_derivative = abs(self.pc1_smooth_history[-1] - self.pc1_smooth_history[-2])
-            self._activity_buffer.append(abs_derivative)
-            if len(self._activity_buffer) > self._activity_window:
-                self._activity_buffer.pop(0)
-
-            if len(self._activity_buffer) >= 20:
-                # Use mean of absolute derivatives (not variance!)
-                # Variance fails because steady rhythmic exercise has uniform
-                # derivatives → low variance → falsely classified as idle.
-                activity_level = np.mean(self._activity_buffer)
-                raw_active = bool(activity_level > self._activity_threshold)
-
-                # Debounce: require sustained state change before flipping.
-                # This prevents a single noise spike from resetting the idle counter.
-                if raw_active != self._is_active:
-                    self._active_debounce += 1
-                    if self._active_debounce >= self._active_debounce_threshold:
-                        self._was_active = self._is_active
-                        self._is_active = raw_active
-                        self._active_debounce = 0
-                else:
-                    self._active_debounce = 0
-
-                if self._is_active:
-                    self._ever_active = True
-                    self._idle_counter = 0
-                    # Don't reset _set_boundary_emitted here - let time-based detection handle it
-                else:
-                    self._idle_counter += 1
-
-                # Activity-based detection as backup (only if time-based hasn't fired yet)
-                if (self._idle_counter >= self._idle_threshold and
-                        self._ever_active and
-                        not self._set_boundary_emitted and
-                        not self._set_boundary_detected):  # Don't override time-based detection
-                    self._set_boundary_detected = True
-                    self._set_boundary_emitted = True
-                    print(f"[pipeline] Activity-based set boundary (backup): idle for {self._idle_counter} samples")
-
-        result['is_active'] = self._is_active
-        result['set_boundary'] = self._set_boundary_detected
-
         return result
 
     def get_raw_data(self):
@@ -463,7 +333,7 @@ def load_imu_data(filepath):
     return data
 
 
-def simulate_streaming(raw_data, pipeline, delay_ms=50, verbose=True):
+def simulate_streaming(raw_data, pipeline, delay_ms=0, verbose=True):
     """
     Simulate real-time streaming through the full pipeline.
 
@@ -622,12 +492,12 @@ if __name__ == "__main__":
     print("=" * 70)
 
     # Step 1: Load raw data (this is the only "batch" step — reading the file)
-    filepath = '/content/imu_20260206_231328.txt'
+    filepath = 'imu_data.txt'
     raw_data = load_imu_data(filepath)
 
     # Step 2: Create the fully online pipeline
     pipeline = StreamingPipeline(
-        amplitude_threshold=21.0,
+        amplitude_threshold=25.0,
         min_samples_between_reps=20,
         baseline_window=50,
         pca_warmup=30,       # Samples before PCA activates
@@ -638,7 +508,7 @@ if __name__ == "__main__":
     results = simulate_streaming(
         raw_data,
         pipeline,
-        delay_ms=10,
+        delay_ms=0,
         verbose=True
     )
 

@@ -34,13 +34,12 @@ class _SpeedGuideWidgetState extends State<SpeedGuideWidget>
   late final Ticker _ticker;
 
   double _position = 0.0; // -1.0 (slow side) to 1.0 (fast side)
-  double _velocity = 0.0;
   Duration _lastElapsed = Duration.zero;
 
-  // Physics tuning
-  static const double _kTrack = 14.0; // restoring force (bowl steepness)
-  static const double _kPush = 8.0; // how strongly speed deviation pushes
-  static const double _kDamping = 3.5; // friction
+  // Smooth interpolation factor (0-1, lower = smoother but slower response)
+  static const double _kSmoothness = 0.08;  // Reduced for much smoother movement
+  // Maximum position (clamp so ball doesn't fall off edges)
+  static const double _kMaxPosition = 0.85;
 
   @override
   void initState() {
@@ -68,19 +67,12 @@ class _SpeedGuideWidgetState extends State<SpeedGuideWidget>
 
     final speedDev = _getSpeedDeviation(elapsed);
 
-    // Forces: bowl restoring + external push + damping
-    final restore = -_kTrack * _position;
-    final push = speedDev * _kPush;
-    final damping = -_kDamping * _velocity;
-    final accel = restore + push + damping;
+    // Direct mapping: speed deviation -> ball position
+    // Clamp to max position so ball doesn't fall off edges
+    final targetPosition = speedDev.clamp(-_kMaxPosition, _kMaxPosition);
 
-    _velocity += accel * dt;
-    _position = (_position + _velocity * dt).clamp(-1.0, 1.0);
-
-    // Soft bounce off edges
-    if (_position.abs() > 0.98) {
-      _velocity *= -0.3;
-    }
+    // Smooth interpolation (exponential smoothing)
+    _position += (targetPosition - _position) * _kSmoothness;
 
     setState(() {});
   }
@@ -94,16 +86,16 @@ class _SpeedGuideWidgetState extends State<SpeedGuideWidget>
   String _statusText() {
     if (!widget.active && !widget.simulate) return '--';
     final abs = _position.abs();
-    if (abs < 0.12) return 'Perfect';
-    if (abs < 0.35) return 'Good';
+    if (abs < 0.45) return 'Perfect';  // Much wider acceptable range
+    if (abs < 0.70) return 'Good';     // Wider good range
     if (_position < 0) return 'Too slow';
     return 'Too fast';
   }
 
   Color _statusColor() {
     final abs = _position.abs();
-    if (abs < 0.12) return AppColors.primary;
-    if (abs < 0.35) return AppColors.accent;
+    if (abs < 0.45) return AppColors.primary;  // Much wider perfect zone
+    if (abs < 0.70) return AppColors.accent;   // Wider good zone
     return AppColors.error;
   }
 
@@ -299,13 +291,13 @@ class _TrackPainter extends CustomPainter {
     // Color: green → amber → red as ball leaves center
     final abs = bp.abs();
     Color ballColor;
-    if (abs < 0.12) {
+    if (abs < 0.45) {  // Much wider green zone
       ballColor = AppColors.primary;
-    } else if (abs < 0.45) {
-      final t = (abs - 0.12) / 0.33;
+    } else if (abs < 0.70) {  // Wider amber zone
+      final t = (abs - 0.45) / 0.25;
       ballColor = Color.lerp(AppColors.primary, AppColors.accent, t)!;
-    } else {
-      final t = ((abs - 0.45) / 0.55).clamp(0.0, 1.0);
+    } else {  // Red zone
+      final t = ((abs - 0.70) / 0.30).clamp(0.0, 1.0);
       ballColor = Color.lerp(AppColors.accent, AppColors.error, t)!;
     }
 

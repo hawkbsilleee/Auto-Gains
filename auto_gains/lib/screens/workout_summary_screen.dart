@@ -106,6 +106,8 @@ class WorkoutSummaryScreen extends StatelessWidget {
   }
 
   Widget _buildTopMetrics(bool hasPaceData) {
+    final hasVolume = session.totalVolume > 0;
+
     return Row(
       children: [
         Expanded(
@@ -128,11 +130,13 @@ class WorkoutSummaryScreen extends StatelessWidget {
         const SizedBox(width: 10),
         Expanded(
           child: MetricCard(
-            label: 'Good Pace',
-            value: hasPaceData
-                ? '${(session.overallGoodPacePercent * 100).toInt()}%'
-                : '--',
-            icon: Icons.speed,
+            label: hasVolume ? 'Volume' : 'Good Pace',
+            value: hasVolume
+                ? '${session.totalVolume.toStringAsFixed(0)} lbs'
+                : hasPaceData
+                    ? '${(session.overallGoodPacePercent * 100).toInt()}%'
+                    : '--',
+            icon: hasVolume ? Icons.fitness_center : Icons.speed,
             color: AppColors.accent,
           ),
         ),
@@ -192,7 +196,7 @@ class WorkoutSummaryScreen extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 14),
-          // Reps
+          // Reps and weight
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -205,6 +209,16 @@ class WorkoutSummaryScreen extends StatelessWidget {
                     color: AppColors.textPrimary,
                   ),
                 ),
+                if (set.weight != null) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    '${set.weight!.toStringAsFixed(0)} lbs',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
+                ],
               ],
             ),
           ),

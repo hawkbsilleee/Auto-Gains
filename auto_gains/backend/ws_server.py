@@ -33,7 +33,7 @@ except ImportError:
     train_classifier = None
 
 
-DEFAULT_SERIAL_PORT = "/dev/cu.usbmodem1301"
+DEFAULT_SERIAL_PORT = "/dev/cu.usbmodem21301"
 DEFAULT_BAUD_RATE = 115200
 DEFAULT_WS_HOST = "0.0.0.0"
 DEFAULT_WS_PORT = 8765

@@ -8,4 +8,4 @@
 /// (or without --mock when Arduino is connected).
 ///
 /// For iOS Simulator: use your Mac's IP (e.g. from `ifconfig | grep "inet "`).
-const String kBackendWsUrl = 'ws://127.0.0.1:8765';
+const String kBackendWsUrl = 'ws://francene-nontransferential-bryant.ngrok-free.dev';

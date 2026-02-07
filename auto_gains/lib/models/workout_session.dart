@@ -21,11 +21,13 @@ class WorkoutSet {
   final DateTime startTime;
   DateTime? endTime;
   final int setNumber;
+  final double? weight; // Weight in lbs or kg
 
   WorkoutSet({
     required this.exercise,
     required this.startTime,
     this.setNumber = 1,
+    this.weight,
   });
 
   Duration get duration => (endTime ?? DateTime.now()).difference(startTime);
@@ -56,6 +58,11 @@ class WorkoutSet {
     final lateAvg =
         late_.map((r) => r.intensity).reduce((a, b) => a + b) / late_.length;
     return ((earlyAvg - lateAvg) / earlyAvg).clamp(0.0, 1.0);
+  }
+
+  double get volume {
+    if (weight == null) return 0;
+    return weight! * reps.length;
   }
 }
 
@@ -105,5 +112,10 @@ class WorkoutSession {
     if (all.isEmpty) return 0.0;
     final good = all.where((d) => d.abs() < 0.12).length;
     return good / all.length;
+  }
+
+  /// Total volume (weight × reps) across all sets
+  double get totalVolume {
+    return sets.fold(0.0, (sum, s) => sum + s.volume);
   }
 }

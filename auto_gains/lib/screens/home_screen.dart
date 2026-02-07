@@ -345,6 +345,13 @@ class _WorkoutHistoryCard extends StatelessWidget {
               _statChip(Icons.layers, '${session.totalSets} sets'),
               const SizedBox(width: 16),
               _statChip(Icons.repeat, '${session.totalReps} reps'),
+              if (session.totalVolume > 0) ...[
+                const SizedBox(width: 16),
+                _statChip(
+                  Icons.fitness_center,
+                  '${session.totalVolume.toStringAsFixed(0)} lbs',
+                ),
+              ],
             ],
           ),
         ],
