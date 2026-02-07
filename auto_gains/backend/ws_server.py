@@ -17,16 +17,48 @@ import argparse
 import time
 from pathlib import Path
 
+import numpy as np
 import serial
 import websockets
 
 from imu_dynamic import StreamingPipeline
+
+# Auto-detect: collect this many samples (~4 sec at 100Hz) then run classifier
+AUTO_DETECT_SAMPLES = 200
+try:
+    import train_classifier
+    _classifier_model = None
+    _classifier_lock = threading.Lock()
+except ImportError:
+    train_classifier = None
 
 
 DEFAULT_SERIAL_PORT = "/dev/cu.usbmodem1301"
 DEFAULT_BAUD_RATE = 115200
 DEFAULT_WS_HOST = "0.0.0.0"
 DEFAULT_WS_PORT = 8765
+
+
+def _load_classifier():
+    """Load classifier model once (thread-safe). Returns (pipeline, window_size, step) or (None, None, None)."""
+    global _classifier_model
+    if train_classifier is None:
+        return None, None, None
+    with _classifier_lock:
+        if _classifier_model is None:
+            backend_dir = Path(__file__).resolve().parent
+            model_path = backend_dir / "classifier_model.joblib"
+            if not model_path.exists():
+                print("[classifier] Model not found at", model_path)
+                return None, None, None
+            try:
+                _classifier_model = train_classifier.load_model(model_path)
+                print("[classifier] Loaded model from", model_path)
+            except Exception as e:
+                print("[classifier] Failed to load model:", e)
+                return None, None, None
+        m = _classifier_model
+        return m["pipeline"], m["window_size"], m["step"]
 
 
 class RepServer:
@@ -42,6 +74,8 @@ class RepServer:
         self.sample_idx = 0
         self.sample_queue = None
         self.running = False
+        # Auto-detect: when not None, collect samples here instead of running rep pipeline
+        self.auto_detect_buffer = None
 
     def _serial_reader(self, loop):
         """Blocking serial read loop running in a background thread."""
@@ -134,7 +168,7 @@ class RepServer:
         self.sample_idx = 0
 
     async def _process_samples(self):
-        """Async loop: pull samples from queue, run pipeline, broadcast."""
+        """Async loop: pull samples from queue, run pipeline or collect for classifier, broadcast."""
         while self.running:
             try:
                 ax, ay, az = await asyncio.wait_for(
@@ -142,6 +176,47 @@ class RepServer:
                 )
             except asyncio.TimeoutError:
                 continue
+
+            # Auto-detect: collect samples for classifier in parallel with rep pipeline
+            if self.auto_detect_buffer is not None:
+                self.auto_detect_buffer.append([float(ax), float(ay), float(az)])
+                if len(self.auto_detect_buffer) >= AUTO_DETECT_SAMPLES:
+                    buffer = self.auto_detect_buffer
+                    self.auto_detect_buffer = None
+                    # Do NOT reset pipeline — reps during detection are preserved
+                    rep_count = (
+                        self.pipeline.counter.rep_count
+                        if self.pipeline is not None and hasattr(self.pipeline, "counter")
+                        else 0
+                    )
+                    pipeline, window_size, step = _load_classifier()
+                    if pipeline is not None and len(buffer) >= 10:
+                        try:
+                            data = np.array(buffer, dtype=np.float64)
+                            pred = train_classifier.classify_exercise(
+                                pipeline, data, window_size=window_size, step=step
+                            )
+                            msg = json.dumps({
+                                "type": "exercise_detected",
+                                "exercise": pred,
+                                "rep_count": rep_count,
+                            })
+                            print(f"[backend] Auto-detect result: {pred}, rep_count={rep_count}")
+                            await self._broadcast(msg)
+                        except Exception as e:
+                            print("[backend] Classifier error:", e)
+                            await self._broadcast(json.dumps({
+                                "type": "exercise_detected",
+                                "exercise": "bicep_curl",
+                                "rep_count": rep_count,
+                                "error": str(e),
+                            }))
+                    else:
+                        await self._broadcast(json.dumps({
+                            "type": "exercise_detected",
+                            "exercise": "bicep_curl",
+                            "rep_count": rep_count,
+                        }))
 
             if self.pipeline is None:
                 continue
@@ -202,8 +277,16 @@ class RepServer:
                     data = json.loads(message)
                     if data.get("action") == "reset":
                         self._reset_pipeline()
+                        self.auto_detect_buffer = None
                         await websocket.send(json.dumps({
                             "type": "reset_ack",
+                        }))
+                    elif data.get("action") == "start_auto_detect":
+                        self.auto_detect_buffer = []
+                        print("[backend] Auto-detect started, collecting samples...")
+                        await websocket.send(json.dumps({
+                            "type": "auto_detect_started",
+                            "samples_needed": AUTO_DETECT_SAMPLES,
                         }))
                 except json.JSONDecodeError:
                     pass

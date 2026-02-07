@@ -6,6 +6,14 @@ import '../models/workout_session.dart';
 
 enum ArduinoConnectionState { disconnected, connecting, connected, error }
 
+/// Result of automatic exercise detection: exercise label and reps already counted.
+class AutoDetectResult {
+  final String exercise;
+  final int repCount;
+
+  const AutoDetectResult({required this.exercise, required this.repCount});
+}
+
 /// Connection timeout; if we don't get "connected" by then, report error.
 const Duration _kConnectionTimeout = Duration(seconds: 10);
 
@@ -18,10 +26,14 @@ class ArduinoService {
   final _repController = StreamController<RepData>.broadcast();
   final _connectionStateController =
       StreamController<ArduinoConnectionState>.broadcast();
+  final _exerciseDetectedController = StreamController<AutoDetectResult>.broadcast();
 
   Stream<RepData> get repStream => _repController.stream;
   Stream<ArduinoConnectionState> get connectionState =>
       _connectionStateController.stream;
+  /// Fired once when backend sends exercise_detected (exercise label + rep count so far).
+  Stream<AutoDetectResult> get exerciseDetectedStream =>
+      _exerciseDetectedController.stream;
 
   ArduinoConnectionState _currentState = ArduinoConnectionState.disconnected;
   ArduinoConnectionState get currentState => _currentState;
@@ -98,6 +110,20 @@ class ArduinoService {
         case 'reset_ack':
           _lastRepTime = DateTime.now();
           break;
+
+        case 'exercise_detected':
+          final exercise = data['exercise'] as String?;
+          final repCount = (data['rep_count'] as num?)?.toInt() ?? 0;
+          if (exercise != null && !_exerciseDetectedController.isClosed) {
+            _exerciseDetectedController.add(AutoDetectResult(
+              exercise: exercise,
+              repCount: repCount,
+            ));
+          }
+          break;
+
+        case 'auto_detect_started':
+          break;
       }
     } catch (_) {
       // Malformed message, ignore
@@ -123,6 +149,14 @@ class ArduinoService {
     }
   }
 
+  /// Ask backend to run exercise classification on the next ~4 sec of IMU data.
+  void startAutoDetect() {
+    if (_channel == null) return;
+    try {
+      _channel!.sink.add(jsonEncode({'action': 'start_auto_detect'}));
+    } catch (_) {}
+  }
+
   void disconnect() {
     _connectionTimer?.cancel();
     _connectionTimer = null;
@@ -142,5 +176,6 @@ class ArduinoService {
     disconnect();
     _repController.close();
     _connectionStateController.close();
+    _exerciseDetectedController.close();
   }
 }

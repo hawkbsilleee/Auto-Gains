@@ -32,6 +32,8 @@ class RepDetector {
   ArduinoService? _arduinoService;
   StreamSubscription? _arduinoRepSub;
   final String wsUrl;
+  /// When true, we created the service and must dispose it. When false, caller owns it.
+  bool _ownsArduinoService = true;
 
   Stream<ArduinoConnectionState>? get connectionState =>
       _arduinoService?.connectionState;
@@ -39,7 +41,13 @@ class RepDetector {
   RepDetector({
     this.mode = DetectionMode.simulation,
     this.wsUrl = kBackendWsUrl,
-  });
+    ArduinoService? existingArduinoService,
+  }) {
+    if (existingArduinoService != null) {
+      _arduinoService = existingArduinoService;
+      _ownsArduinoService = false;
+    }
+  }
 
   void start([SensorService? sensorService]) {
     _lastRepTime = DateTime.now();
@@ -103,20 +111,23 @@ class RepDetector {
   }
 
   void _startArduino() {
-    _arduinoService = ArduinoService(wsUrl: wsUrl);
+    if (_arduinoService == null) {
+      _arduinoService = ArduinoService(wsUrl: wsUrl);
+      _ownsArduinoService = true;
+      _arduinoService!.connect();
+    }
     _arduinoRepSub = _arduinoService!.repStream.listen((repData) {
       if (!_repController.isClosed) {
         _repController.add(repData);
       }
     });
-    _arduinoService!.connect();
   }
 
   void stop() {
     _simTimer?.cancel();
     _sensorSub?.cancel();
     _arduinoRepSub?.cancel();
-    _arduinoService?.disconnect();
+    if (_ownsArduinoService) _arduinoService?.disconnect();
   }
 
   /// Retry connecting to the backend (Arduino mode only).
@@ -126,7 +137,7 @@ class RepDetector {
 
   void dispose() {
     stop();
-    _arduinoService?.dispose();
+    if (_ownsArduinoService) _arduinoService?.dispose();
     _repController.close();
   }
 }

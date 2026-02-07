@@ -12,11 +12,17 @@ import 'workout_summary_screen.dart';
 class ActiveWorkoutScreen extends StatefulWidget {
   final List<Exercise> exercises;
   final DetectionMode detectionMode;
+  /// When coming from auto-detect, reuse this connection so reps during detection aren't lost.
+  final ArduinoService? arduinoService;
+  /// Reps already counted during auto-detect (so the first set shows the correct count).
+  final int? initialRepCount;
 
   const ActiveWorkoutScreen({
     super.key,
     required this.exercises,
     this.detectionMode = DetectionMode.simulation,
+    this.arduinoService,
+    this.initialRepCount,
   });
 
   @override
@@ -47,7 +53,10 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       startTime: DateTime.now(),
     );
-    _repDetector = RepDetector(mode: widget.detectionMode);
+    _repDetector = RepDetector(
+      mode: widget.detectionMode,
+      existingArduinoService: widget.arduinoService,
+    );
 
     _pulseController = AnimationController(
       vsync: this,
@@ -72,12 +81,15 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
   void _startExercise() {
     _repDetector.stop();
     _repSub?.cancel();
-    _setRepCount = 0;
-    _lastIntensity = 0;
 
     final setsForExercise = _session.sets
         .where((s) => s.exercise == widget.exercises[_currentExerciseIndex])
         .length;
+    final isFirstSetFromAutoDetect =
+        widget.initialRepCount != null && _currentExerciseIndex == 0 && setsForExercise == 0;
+
+    _setRepCount = isFirstSetFromAutoDetect ? widget.initialRepCount! : 0;
+    _lastIntensity = 0;
 
     _currentSet = WorkoutSet(
       exercise: widget.exercises[_currentExerciseIndex],
@@ -85,7 +97,18 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
       setNumber: setsForExercise + 1,
     );
 
-    _repDetector = RepDetector(mode: widget.detectionMode);
+    if (isFirstSetFromAutoDetect && widget.initialRepCount! > 0) {
+      final now = DateTime.now();
+      for (var i = 0; i < widget.initialRepCount!; i++) {
+        _currentSet.reps.add(RepData(
+          timestamp: now,
+          peakAcceleration: 0,
+          repDuration: Duration.zero,
+          intensity: 0,
+        ));
+      }
+    }
+
     _repDetector.start();
     _repSub = _repDetector.repStream.listen(_onRep);
   }
@@ -185,6 +208,7 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
     _repSub?.cancel();
     _timer?.cancel();
     _pulseController.dispose();
+    widget.arduinoService?.dispose();
     super.dispose();
   }
 
