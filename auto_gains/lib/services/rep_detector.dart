@@ -2,16 +2,21 @@ import 'dart:async';
 import 'dart:math';
 import '../models/workout_session.dart';
 import 'sensor_service.dart';
+import 'arduino_service.dart';
+
+enum DetectionMode { simulation, sensor, arduino }
 
 class RepDetector {
-  final bool simulationMode;
+  final DetectionMode mode;
   final _repController = StreamController<RepData>.broadcast();
   Stream<RepData> get repStream => _repController.stream;
 
+  // Simulation fields
   Timer? _simTimer;
   final _random = Random();
   int _simRepCount = 0;
 
+  // Sensor fields
   StreamSubscription? _sensorSub;
   double _smoothed = 0;
   double _prev = 0;
@@ -22,14 +27,31 @@ class RepDetector {
   static const _threshold = 1.5;
   static const _alpha = 0.3;
 
-  RepDetector({this.simulationMode = true});
+  // Arduino fields
+  ArduinoService? _arduinoService;
+  StreamSubscription? _arduinoRepSub;
+  final String wsUrl;
+
+  Stream<ArduinoConnectionState>? get connectionState =>
+      _arduinoService?.connectionState;
+
+  RepDetector({
+    this.mode = DetectionMode.simulation,
+    this.wsUrl = 'ws://172.25.18.162:8765',
+  });
 
   void start([SensorService? sensorService]) {
     _lastRepTime = DateTime.now();
-    if (simulationMode) {
-      _startSimulation();
-    } else if (sensorService != null) {
-      _startDetection(sensorService);
+    switch (mode) {
+      case DetectionMode.simulation:
+        _startSimulation();
+        break;
+      case DetectionMode.sensor:
+        if (sensorService != null) _startDetection(sensorService);
+        break;
+      case DetectionMode.arduino:
+        _startArduino();
+        break;
     }
   }
 
@@ -79,13 +101,26 @@ class RepDetector {
     });
   }
 
+  void _startArduino() {
+    _arduinoService = ArduinoService(wsUrl: wsUrl);
+    _arduinoRepSub = _arduinoService!.repStream.listen((repData) {
+      if (!_repController.isClosed) {
+        _repController.add(repData);
+      }
+    });
+    _arduinoService!.connect();
+  }
+
   void stop() {
     _simTimer?.cancel();
     _sensorSub?.cancel();
+    _arduinoRepSub?.cancel();
+    _arduinoService?.disconnect();
   }
 
   void dispose() {
     stop();
+    _arduinoService?.dispose();
     _repController.close();
   }
 }

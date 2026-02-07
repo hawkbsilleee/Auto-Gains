@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../theme/app_theme.dart';
 import '../models/exercise.dart';
 import '../data/exercise_library.dart';
+import '../services/rep_detector.dart';
 import 'active_workout_screen.dart';
 
 class LibraryScreen extends StatefulWidget {
@@ -15,6 +16,7 @@ class LibraryScreen extends StatefulWidget {
 class _LibraryScreenState extends State<LibraryScreen> {
   MuscleGroup? _selectedGroup;
   final Set<Exercise> _selected = {};
+  DetectionMode _detectionMode = DetectionMode.simulation;
 
   List<Exercise> get _filtered {
     if (_selectedGroup == null) return exerciseLibrary;
@@ -201,23 +203,77 @@ class _LibraryScreenState extends State<LibraryScreen> {
           color: AppColors.background,
           border: Border(top: BorderSide(color: AppColors.border, width: 0.5)),
         ),
-        child: ElevatedButton(
-          onPressed: () {
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(
-                builder: (_) => ActiveWorkoutScreen(
-                  exercises: _selected.toList(),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Text(
+                  'Source: ',
+                  style: TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                _modeChip('Sim', DetectionMode.simulation),
+                const SizedBox(width: 8),
+                _modeChip('Arduino', DetectionMode.arduino),
+              ],
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () {
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => ActiveWorkoutScreen(
+                        exercises: _selected.toList(),
+                        detectionMode: _detectionMode,
+                      ),
+                    ),
+                  );
+                },
+                child: Text(
+                  'Begin Workout  (${_selected.length} exercise${_selected.length > 1 ? 's' : ''})',
+                  style: GoogleFonts.inter(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
-            );
-          },
-          child: Text(
-            'Begin Workout  (${_selected.length} exercise${_selected.length > 1 ? 's' : ''})',
-            style: GoogleFonts.inter(
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
             ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _modeChip(String label, DetectionMode mode) {
+    final isActive = _detectionMode == mode;
+    return GestureDetector(
+      onTap: () => setState(() => _detectionMode = mode),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+        decoration: BoxDecoration(
+          color: isActive
+              ? AppColors.primary.withValues(alpha: 0.15)
+              : AppColors.surface,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: isActive ? AppColors.primary : AppColors.border,
+            width: isActive ? 1.5 : 0.5,
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: isActive ? FontWeight.w600 : FontWeight.w500,
+            color: isActive ? AppColors.primary : AppColors.textSecondary,
           ),
         ),
       ),

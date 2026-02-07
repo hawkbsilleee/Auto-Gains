@@ -5,13 +5,19 @@ import '../theme/app_theme.dart';
 import '../models/exercise.dart';
 import '../models/workout_session.dart';
 import '../services/rep_detector.dart';
+import '../services/arduino_service.dart';
 import '../services/workout_store.dart';
 import 'workout_summary_screen.dart';
 
 class ActiveWorkoutScreen extends StatefulWidget {
   final List<Exercise> exercises;
+  final DetectionMode detectionMode;
 
-  const ActiveWorkoutScreen({super.key, required this.exercises});
+  const ActiveWorkoutScreen({
+    super.key,
+    required this.exercises,
+    this.detectionMode = DetectionMode.simulation,
+  });
 
   @override
   State<ActiveWorkoutScreen> createState() => _ActiveWorkoutScreenState();
@@ -41,7 +47,7 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       startTime: DateTime.now(),
     );
-    _repDetector = RepDetector(simulationMode: true);
+    _repDetector = RepDetector(mode: widget.detectionMode);
 
     _pulseController = AnimationController(
       vsync: this,
@@ -79,7 +85,7 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
       setNumber: setsForExercise + 1,
     );
 
-    _repDetector = RepDetector(simulationMode: true);
+    _repDetector = RepDetector(mode: widget.detectionMode);
     _repDetector.start();
     _repSub = _repDetector.repStream.listen(_onRep);
   }
@@ -238,30 +244,89 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
                         ],
                       ),
                     ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 10),
-                      decoration: BoxDecoration(
-                        color: AppColors.surface,
-                        borderRadius: BorderRadius.circular(12),
-                        border:
-                            Border.all(color: AppColors.border, width: 0.5),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.timer_outlined,
-                              size: 16, color: AppColors.textSecondary),
-                          const SizedBox(width: 6),
-                          Text(
-                            _fmt(_elapsed),
-                            style: GoogleFonts.inter(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.textPrimary,
-                            ),
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 10),
+                          decoration: BoxDecoration(
+                            color: AppColors.surface,
+                            borderRadius: BorderRadius.circular(12),
+                            border:
+                                Border.all(color: AppColors.border, width: 0.5),
                           ),
-                        ],
-                      ),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.timer_outlined,
+                                  size: 16, color: AppColors.textSecondary),
+                              const SizedBox(width: 6),
+                              Text(
+                                _fmt(_elapsed),
+                                style: GoogleFonts.inter(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppColors.textPrimary,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (widget.detectionMode == DetectionMode.arduino &&
+                            _repDetector.connectionState != null)
+                          StreamBuilder<ArduinoConnectionState>(
+                            stream: _repDetector.connectionState,
+                            builder: (context, snapshot) {
+                              final state = snapshot.data ??
+                                  ArduinoConnectionState.disconnected;
+                              final color = switch (state) {
+                                ArduinoConnectionState.connected =>
+                                  AppColors.primary,
+                                ArduinoConnectionState.connecting =>
+                                  AppColors.accent,
+                                ArduinoConnectionState.error => AppColors.error,
+                                ArduinoConnectionState.disconnected =>
+                                  AppColors.textTertiary,
+                              };
+                              final label = switch (state) {
+                                ArduinoConnectionState.connected => 'IMU',
+                                ArduinoConnectionState.connecting => '...',
+                                ArduinoConnectionState.error => 'ERR',
+                                ArduinoConnectionState.disconnected => 'OFF',
+                              };
+                              return Container(
+                                margin: const EdgeInsets.only(left: 8),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 10, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: color.withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Container(
+                                      width: 8,
+                                      height: 8,
+                                      decoration: BoxDecoration(
+                                        color: color,
+                                        shape: BoxShape.circle,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Text(
+                                      label,
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: color,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            },
+                          ),
+                      ],
                     ),
                   ],
                 ),
