@@ -8,7 +8,7 @@ arduino = serial.Serial(port="/dev/cu.usbmodem1301", baudrate=115200, timeout=1)
 time.sleep(2)
 
 # Change this to "shoulders" or "bicep" to save into test_data/shoulders/ or test_data/bicep/
-label = "shoulders"
+label = "bicep"
 
 backend_dir = Path(__file__).resolve().parent
 desired_dir = backend_dir / "test_data" / label

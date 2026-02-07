@@ -92,6 +92,8 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
 
   void _onRep(RepData rep) {
     if (!mounted) return;
+    // Debug: confirm UI is receiving reps and updating count
+    print('[flutter] UI received rep: setRepCount=${_setRepCount + 1} intensity=${rep.intensity.toStringAsFixed(2)}');
     setState(() {
       _setRepCount++;
       _lastIntensity = rep.intensity;
@@ -290,38 +292,55 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
                               final label = switch (state) {
                                 ArduinoConnectionState.connected => 'IMU',
                                 ArduinoConnectionState.connecting => '...',
-                                ArduinoConnectionState.error => 'ERR',
+                                ArduinoConnectionState.error => 'No connection',
                                 ArduinoConnectionState.disconnected => 'OFF',
                               };
-                              return Container(
-                                margin: const EdgeInsets.only(left: 8),
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 10, vertical: 6),
-                                decoration: BoxDecoration(
-                                  color: color.withValues(alpha: 0.15),
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Container(
-                                      width: 8,
-                                      height: 8,
-                                      decoration: BoxDecoration(
-                                        color: color,
-                                        shape: BoxShape.circle,
-                                      ),
+                              final isError = state == ArduinoConnectionState.error;
+                              return Tooltip(
+                                message: isError
+                                    ? 'Backend not reachable. Start: python backend/ws_server.py --mock. Then tap to retry.'
+                                    : (state == ArduinoConnectionState.connected
+                                        ? 'IMU connected'
+                                        : state == ArduinoConnectionState.connecting
+                                            ? 'Connecting...'
+                                            : 'IMU off'),
+                                child: GestureDetector(
+                                  onTap: isError
+                                      ? () {
+                                          _repDetector.reconnectArduino();
+                                        }
+                                      : null,
+                                  child: Container(
+                                    margin: const EdgeInsets.only(left: 8),
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 10, vertical: 6),
+                                    decoration: BoxDecoration(
+                                      color: color.withValues(alpha: 0.15),
+                                      borderRadius: BorderRadius.circular(8),
                                     ),
-                                    const SizedBox(width: 6),
-                                    Text(
-                                      label,
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        color: color,
-                                        fontWeight: FontWeight.w600,
-                                      ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Container(
+                                          width: 8,
+                                          height: 8,
+                                          decoration: BoxDecoration(
+                                            color: color,
+                                            shape: BoxShape.circle,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 6),
+                                        Text(
+                                          label,
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: color,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ],
                                     ),
-                                  ],
+                                  ),
                                 ),
                               );
                             },

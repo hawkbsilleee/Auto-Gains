@@ -57,6 +57,7 @@ class RepServer:
             print(f"[serial] ERROR: Could not open {self.serial_port}: {e}")
             return
 
+        sample_count = 0
         try:
             while self.running:
                 try:
@@ -67,6 +68,11 @@ class RepServer:
                     if len(parts) != 3:
                         continue
                     ax, ay, az = int(parts[0]), int(parts[1]), int(parts[2])
+                    sample_count += 1
+                    if sample_count == 1:
+                        print(f"[serial] First sample received: ax={ax} ay={ay} az={az}")
+                    elif sample_count % 500 == 0:
+                        print(f"[serial] Data stream alive: {sample_count} samples received from Arduino")
                     loop.call_soon_threadsafe(
                         self.sample_queue.put_nowait, (ax, ay, az)
                     )
@@ -104,9 +110,13 @@ class RepServer:
             return
 
         print("[mock] Client connected, starting replay...")
-        for sample in samples:
+        for i, sample in enumerate(samples):
             if not self.running:
                 break
+            if i == 0:
+                print(f"[mock] First sample sent: {sample}")
+            elif (i + 1) % 500 == 0:
+                print(f"[mock] Replay progress: {i + 1}/{len(samples)} samples")
             loop.call_soon_threadsafe(self.sample_queue.put_nowait, sample)
             time.sleep(0.01)  # ~100Hz, matching typical Arduino rate
 
@@ -139,12 +149,17 @@ class RepServer:
             result = self.pipeline.process_sample(ax, ay, az, self.sample_idx)
             self.sample_idx += 1
 
+            # Debug: confirm backend is processing data (every 500 samples)
+            if self.sample_idx % 500 == 0:
+                print(f"[backend] Processing stream: sample_idx={self.sample_idx}, rep_count={result['rep_count']}")
+
             if result["rep_detected"]:
                 message = json.dumps({
                     "type": "rep",
                     "rep_count": result["rep_count"],
                     "amplitude": round(result["amplitude"], 2),
                 })
+                print(f"[backend] REP detected (amplitude={result['amplitude']:.2f}), broadcasting to {len(self.clients)} client(s)")
                 await self._broadcast(message)
 
             # Periodic status heartbeat every 50 samples

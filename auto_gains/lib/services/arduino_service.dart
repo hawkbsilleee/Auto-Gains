@@ -1,14 +1,19 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:web_socket_channel/web_socket_channel.dart';
+import '../config/backend_config.dart';
 import '../models/workout_session.dart';
 
 enum ArduinoConnectionState { disconnected, connecting, connected, error }
+
+/// Connection timeout; if we don't get "connected" by then, report error.
+const Duration _kConnectionTimeout = Duration(seconds: 10);
 
 class ArduinoService {
   final String wsUrl;
   WebSocketChannel? _channel;
   StreamSubscription? _subscription;
+  Timer? _connectionTimer;
 
   final _repController = StreamController<RepData>.broadcast();
   final _connectionStateController =
@@ -23,10 +28,16 @@ class ArduinoService {
 
   DateTime _lastRepTime = DateTime.now();
 
-  ArduinoService({this.wsUrl = 'ws://172.25.18.162:8765'});
+  ArduinoService({String? wsUrl}) : wsUrl = wsUrl ?? kBackendWsUrl;
 
   void connect() {
     _updateState(ArduinoConnectionState.connecting);
+    _connectionTimer?.cancel();
+    _connectionTimer = Timer(_kConnectionTimeout, () {
+      if (_currentState == ArduinoConnectionState.connecting) {
+        _updateState(ArduinoConnectionState.error);
+      }
+    });
     try {
       _channel = WebSocketChannel.connect(Uri.parse(wsUrl));
       _subscription = _channel!.stream.listen(
@@ -35,6 +46,8 @@ class ArduinoService {
         onDone: _onDone,
       );
     } catch (e) {
+      _connectionTimer?.cancel();
+      _connectionTimer = null;
       _updateState(ArduinoConnectionState.error);
     }
   }
@@ -44,8 +57,21 @@ class ArduinoService {
       final data = jsonDecode(rawMessage as String) as Map<String, dynamic>;
       final type = data['type'] as String?;
 
+      // Debug: confirm frontend is receiving data from backend
+      if (type == 'status') {
+        // Log status less often to avoid spam (every 500 samples)
+        final sampleIdx = data['sample_idx'] as int? ?? 0;
+        if (sampleIdx % 500 == 0 && sampleIdx > 0) {
+          print('[flutter] WS received: type=status sample_idx=$sampleIdx');
+        }
+      } else {
+        print('[flutter] WS received: type=$type');
+      }
+
       switch (type) {
         case 'connected':
+          _connectionTimer?.cancel();
+          _connectionTimer = null;
           _updateState(ArduinoConnectionState.connected);
           _lastRepTime = DateTime.now();
           break;
@@ -56,6 +82,7 @@ class ArduinoService {
           final elapsed = now.difference(_lastRepTime);
           _lastRepTime = now;
 
+          print('[flutter] REP received from backend: amplitude=$amplitude -> forwarding to UI');
           _repController.add(RepData(
             timestamp: now,
             peakAcceleration: amplitude,
@@ -78,10 +105,14 @@ class ArduinoService {
   }
 
   void _onError(Object error) {
+    _connectionTimer?.cancel();
+    _connectionTimer = null;
     _updateState(ArduinoConnectionState.error);
   }
 
   void _onDone() {
+    _connectionTimer?.cancel();
+    _connectionTimer = null;
     _updateState(ArduinoConnectionState.disconnected);
   }
 
@@ -93,10 +124,18 @@ class ArduinoService {
   }
 
   void disconnect() {
+    _connectionTimer?.cancel();
+    _connectionTimer = null;
     _subscription?.cancel();
     _channel?.sink.close();
     _channel = null;
     _updateState(ArduinoConnectionState.disconnected);
+  }
+
+  /// Disconnect and connect again (e.g. after backend was started).
+  void reconnect() {
+    disconnect();
+    connect();
   }
 
   void dispose() {

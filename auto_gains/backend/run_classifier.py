@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-import exercise_classifier
+import train_classifier
 
 backend_dir = Path(__file__).resolve().parent
 model_path = backend_dir / "classifier_model.joblib"
@@ -10,8 +10,8 @@ test_data_dir = backend_dir / "test_data"
 
 # Map test_data subfolder names to classifier labels
 FOLDER_TO_LABEL = {
-    "shoulders": exercise_classifier.SHOULDER_PRESS,
-    "bicep": exercise_classifier.BICEP_CURL,
+    "shoulders": train_classifier.SHOULDER_PRESS,
+    "bicep": train_classifier.BICEP_CURL,
 }
 
 
@@ -26,7 +26,7 @@ def get_true_label(data_path: Path, test_data_dir: Path) -> str | None:
 
 
 def main():
-    model = exercise_classifier.load_model(model_path)
+    model = train_classifier.load_model(model_path)
     pipeline = model["pipeline"]
     window_size = model["window_size"]
     step = model["step"]
@@ -52,13 +52,13 @@ def main():
             skipped += 1
             continue
 
-        data = exercise_classifier.load_imu_file(str(data_path))
+        data = train_classifier.load_imu_file(str(data_path))
         if len(data) < 10:
             print(f"  {data_path.relative_to(test_data_dir)}: skipped (too few samples)")
             skipped += 1
             continue
 
-        pred_label = exercise_classifier.classify_exercise(
+        pred_label = train_classifier.classify_exercise(
             pipeline, data, window_size=window_size, step=step
         )
         results.append((data_path.relative_to(test_data_dir), true_label, pred_label))
@@ -80,7 +80,7 @@ def main():
     print(f"  Overall: {n_correct}/{n_total} correct = {accuracy:.1%}")
 
     # Per-class accuracy (for each true label, how many we got right)
-    for label in [exercise_classifier.BICEP_CURL, exercise_classifier.SHOULDER_PRESS]:
+    for label in [train_classifier.BICEP_CURL, train_classifier.SHOULDER_PRESS]:
         class_results = [(true, pred) for _, true, pred in results if true == label]
         if not class_results:
             continue

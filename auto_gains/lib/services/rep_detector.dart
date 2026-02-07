@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math';
+import '../config/backend_config.dart';
 import '../models/workout_session.dart';
 import 'sensor_service.dart';
 import 'arduino_service.dart';
@@ -37,7 +38,7 @@ class RepDetector {
 
   RepDetector({
     this.mode = DetectionMode.simulation,
-    this.wsUrl = 'ws://172.25.18.162:8765',
+    this.wsUrl = kBackendWsUrl,
   });
 
   void start([SensorService? sensorService]) {
@@ -116,6 +117,11 @@ class RepDetector {
     _sensorSub?.cancel();
     _arduinoRepSub?.cancel();
     _arduinoService?.disconnect();
+  }
+
+  /// Retry connecting to the backend (Arduino mode only).
+  void reconnectArduino() {
+    _arduinoService?.reconnect();
   }
 
   void dispose() {

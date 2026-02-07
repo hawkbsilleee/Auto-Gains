@@ -262,7 +262,7 @@ def load_model(path: str | Path | None = None):
     """
     path = Path(path) if path is not None else DEFAULT_MODEL_PATH
     if not path.exists():
-        raise FileNotFoundError(f"Model not found at {path}. Run exercise_classifier.py to train and save.")
+        raise FileNotFoundError(f"Model not found at {path}. Run train_classifier.py to train and save.")
     return joblib.load(path)
 
 
