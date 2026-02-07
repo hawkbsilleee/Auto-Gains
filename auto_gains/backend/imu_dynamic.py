@@ -286,13 +286,17 @@ class StreamingPipeline:
         # Activity detection for automatic set boundaries
         self._activity_buffer = []          # Rolling window of |PC1 derivative|
         self._activity_window = 100         # ~1 sec at 100Hz
-        self._activity_threshold = 0.02     # Min variance to consider "active"
+        self._activity_threshold = 0.05     # Min mean(|derivative|) to consider "active"
         self._is_active = False
         self._was_active = False
         self._idle_counter = 0
-        self._idle_threshold = 500          # 5 sec at 100Hz -> set boundary
+        self._idle_threshold = 300          # 3 sec at 100Hz -> set boundary
         self._set_boundary_detected = False
         self._ever_active = False           # Prevents false boundary at start
+        self._set_boundary_emitted = False  # Prevents re-firing until next activity
+        # Debounce: require sustained state change before flipping _is_active
+        self._active_debounce = 0
+        self._active_debounce_threshold = 25  # ~0.25 sec at 100Hz
 
         # Store raw + intermediate signals for visualization
         self.raw_history = []
@@ -363,19 +367,35 @@ class StreamingPipeline:
                 self._activity_buffer.pop(0)
 
             if len(self._activity_buffer) >= 20:
-                activity_level = np.var(self._activity_buffer)
-                self._was_active = self._is_active
-                self._is_active = bool(activity_level > self._activity_threshold)
+                # Use mean of absolute derivatives (not variance!)
+                # Variance fails because steady rhythmic exercise has uniform
+                # derivatives → low variance → falsely classified as idle.
+                activity_level = np.mean(self._activity_buffer)
+                raw_active = bool(activity_level > self._activity_threshold)
+
+                # Debounce: require sustained state change before flipping.
+                # This prevents a single noise spike from resetting the idle counter.
+                if raw_active != self._is_active:
+                    self._active_debounce += 1
+                    if self._active_debounce >= self._active_debounce_threshold:
+                        self._was_active = self._is_active
+                        self._is_active = raw_active
+                        self._active_debounce = 0
+                else:
+                    self._active_debounce = 0
 
                 if self._is_active:
                     self._ever_active = True
                     self._idle_counter = 0
+                    self._set_boundary_emitted = False
                 else:
                     self._idle_counter += 1
 
-                if (self._idle_counter == self._idle_threshold and
-                        self._ever_active):
+                if (self._idle_counter >= self._idle_threshold and
+                        self._ever_active and
+                        not self._set_boundary_emitted):
                     self._set_boundary_detected = True
+                    self._set_boundary_emitted = True
 
         result['is_active'] = self._is_active
         result['set_boundary'] = self._set_boundary_detected

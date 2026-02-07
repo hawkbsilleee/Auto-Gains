@@ -312,6 +312,9 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
     if (!mounted) return;
     if (_currentSet.reps.isEmpty) return;
 
+    final completedSetNumber = _currentSet.setNumber;
+    final completedReps = _currentSet.reps.length;
+
     // Save current set with pace data
     _currentSet.endTime = DateTime.now();
     _currentSet.paceDeviations.addAll(_paceHistory);
@@ -338,6 +341,29 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
       );
       _setRepCount = 0;
     });
+
+    // Haptic feedback
+    Vibration.vibrate(duration: 150);
+
+    // Visual feedback
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Set $completedSetNumber complete \u2014 $completedReps reps',
+            style: GoogleFonts.inter(
+              fontWeight: FontWeight.w600,
+              color: AppColors.background,
+            ),
+          ),
+          backgroundColor: AppColors.primary,
+          duration: const Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+          margin: const EdgeInsets.fromLTRB(20, 0, 20, 80),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
+      );
+    }
   }
 
   void _finishWorkout() {
