@@ -237,6 +237,15 @@ class RepServer:
                 print(f"[backend] REP detected (amplitude={result['amplitude']:.2f}), broadcasting to {len(self.clients)} client(s)")
                 await self._broadcast(message)
 
+            # Stream speed/tempo data every 3 samples (~33Hz at 100Hz input)
+            if self.sample_idx % 3 == 0:
+                speed_msg = json.dumps({
+                    "type": "speed",
+                    "speed_deviation": round(result.get("speed_deviation", 0.0), 3),
+                    "phase": result.get("phase", "concentric"),
+                })
+                await self._broadcast(speed_msg)
+
             # Periodic status heartbeat every 50 samples
             if self.sample_idx % 50 == 0:
                 status = json.dumps({

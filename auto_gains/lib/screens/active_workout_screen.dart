@@ -8,6 +8,7 @@ import '../services/rep_detector.dart';
 import '../services/arduino_service.dart';
 import '../services/workout_store.dart';
 import 'workout_summary_screen.dart';
+import '../widgets/speed_guide.dart';
 
 class ActiveWorkoutScreen extends StatefulWidget {
   final List<Exercise> exercises;
@@ -35,13 +36,20 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
   late WorkoutSet _currentSet;
   late RepDetector _repDetector;
   StreamSubscription<RepData>? _repSub;
+  StreamSubscription<double>? _speedSub;
 
   int _currentExerciseIndex = 0;
   int _setRepCount = 0;
   double _lastIntensity = 0;
+  double _speedDeviation = 0;
 
   Timer? _timer;
   Duration _elapsed = Duration.zero;
+
+  // Countdown
+  int _countdownValue = 3;
+  Timer? _countdownTimer;
+  bool get _isCountingDown => _countdownValue > 0;
 
   late final AnimationController _pulseController;
   late final Animation<double> _pulseAnimation;
@@ -66,8 +74,31 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
       CurvedAnimation(parent: _pulseController, curve: Curves.easeOut),
     );
 
-    _startExercise();
-    _startTimer();
+    // Pre-initialize the current set so build() can reference it during countdown
+    _currentSet = WorkoutSet(
+      exercise: widget.exercises[_currentExerciseIndex],
+      startTime: DateTime.now(),
+      setNumber: 1,
+    );
+
+    _startCountdown();
+  }
+
+  void _startCountdown() {
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      setState(() {
+        _countdownValue--;
+      });
+      if (_countdownValue <= 0) {
+        timer.cancel();
+        _startExercise();
+        _startTimer();
+      }
+    });
   }
 
   void _startTimer() {
@@ -81,6 +112,10 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
   void _startExercise() {
     _repDetector.stop();
     _repSub?.cancel();
+    _speedSub?.cancel();
+    _setRepCount = 0;
+    _lastIntensity = 0;
+    _speedDeviation = 0;
 
     final setsForExercise = _session.sets
         .where((s) => s.exercise == widget.exercises[_currentExerciseIndex])
@@ -111,6 +146,14 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
 
     _repDetector.start();
     _repSub = _repDetector.repStream.listen(_onRep);
+
+    // Subscribe to speed stream (arduino mode only)
+    final speed = _repDetector.speedStream;
+    if (speed != null) {
+      _speedSub = speed.listen((deviation) {
+        if (mounted) setState(() => _speedDeviation = deviation);
+      });
+    }
   }
 
   void _onRep(RepData rep) {
@@ -206,7 +249,9 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
   void dispose() {
     _repDetector.dispose();
     _repSub?.cancel();
+    _speedSub?.cancel();
     _timer?.cancel();
+    _countdownTimer?.cancel();
     _pulseController.dispose();
     widget.arduinoService?.dispose();
     super.dispose();
@@ -236,11 +281,13 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
         if (!didPop) _confirmEnd();
       },
       child: Scaffold(
-        body: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: Column(
-              children: [
+        body: Stack(
+          children: [
+            SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Column(
+                  children: [
                 const SizedBox(height: 12),
                 // Top bar
                 Row(
@@ -404,7 +451,15 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
                   ),
                 ),
 
-                const SizedBox(height: 40),
+                const SizedBox(height: 24),
+
+                // Speed / tempo guide
+                SpeedGuideWidget(
+                  simulate: widget.detectionMode != DetectionMode.arduino,
+                  speedDeviation: _speedDeviation,
+                ),
+
+                const SizedBox(height: 20),
 
                 // Intensity bar
                 Padding(
@@ -442,7 +497,7 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
                   ),
                 ),
 
-                const SizedBox(height: 28),
+                const SizedBox(height: 20),
 
                 // Metrics row
                 Row(
@@ -506,6 +561,26 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
               ],
             ),
           ),
+        ),
+            // Countdown overlay
+            if (_isCountingDown)
+              Positioned.fill(
+                child: Container(
+                  color: AppColors.background.withValues(alpha: 0.92),
+                  child: Center(
+                    child: Text(
+                      '$_countdownValue',
+                      style: GoogleFonts.inter(
+                        fontSize: 120,
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.primary,
+                        height: 1,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
         ),
       ),
     );

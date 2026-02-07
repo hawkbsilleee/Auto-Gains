@@ -24,11 +24,13 @@ class ArduinoService {
   Timer? _connectionTimer;
 
   final _repController = StreamController<RepData>.broadcast();
+  final _speedController = StreamController<double>.broadcast();
   final _connectionStateController =
       StreamController<ArduinoConnectionState>.broadcast();
   final _exerciseDetectedController = StreamController<AutoDetectResult>.broadcast();
 
   Stream<RepData> get repStream => _repController.stream;
+  Stream<double> get speedStream => _speedController.stream;
   Stream<ArduinoConnectionState> get connectionState =>
       _connectionStateController.stream;
   /// Fired once when backend sends exercise_detected (exercise label + rep count so far).
@@ -103,6 +105,13 @@ class ArduinoService {
           ));
           break;
 
+        case 'speed':
+          final deviation = (data['speed_deviation'] as num).toDouble();
+          if (!_speedController.isClosed) {
+            _speedController.add(deviation);
+          }
+          break;
+
         case 'status':
           // Heartbeat — connection alive
           break;
@@ -175,6 +184,7 @@ class ArduinoService {
   void dispose() {
     disconnect();
     _repController.close();
+    _speedController.close();
     _connectionStateController.close();
     _exerciseDetectedController.close();
   }
