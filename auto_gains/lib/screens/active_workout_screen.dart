@@ -1,29 +1,41 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:vibration/vibration.dart';
 import '../theme/app_theme.dart';
 import '../models/exercise.dart';
 import '../models/workout_session.dart';
+import '../data/exercise_library.dart';
+import '../config/backend_config.dart';
 import '../services/rep_detector.dart';
 import '../services/arduino_service.dart';
 import '../services/workout_store.dart';
 import 'workout_summary_screen.dart';
 import '../widgets/speed_guide.dart';
+import '../widgets/pace_timeline.dart';
+
+// Configurable rest timer settings
+const Duration kMaxRestDuration = Duration(seconds: 10);
+const Duration kRestCheckInterval = Duration(seconds: 5);
+
+const _autoDetectPlaceholder = Exercise(
+  id: 'auto_detect',
+  name: 'Detecting...',
+  primaryMuscle: MuscleGroup.fullBody,
+  description: '',
+);
 
 class ActiveWorkoutScreen extends StatefulWidget {
   final List<Exercise> exercises;
   final DetectionMode detectionMode;
-  /// When coming from auto-detect, reuse this connection so reps during detection aren't lost.
-  final ArduinoService? arduinoService;
-  /// Reps already counted during auto-detect (so the first set shows the correct count).
-  final int? initialRepCount;
+  /// When true, connects to backend and runs exercise classification automatically.
+  final bool autoDetect;
 
   const ActiveWorkoutScreen({
     super.key,
     required this.exercises,
     this.detectionMode = DetectionMode.simulation,
-    this.arduinoService,
-    this.initialRepCount,
+    this.autoDetect = false,
   });
 
   @override
@@ -38,10 +50,22 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
   StreamSubscription<RepData>? _repSub;
   StreamSubscription<double>? _speedSub;
 
+  /// Mutable exercise list — starts with placeholder for auto-detect, otherwise copies widget.exercises.
+  late List<Exercise> _exercises;
+
   int _currentExerciseIndex = 0;
   int _setRepCount = 0;
-  double _lastIntensity = 0;
   double _speedDeviation = 0;
+
+  // Pace tracking
+  final List<double> _paceHistory = [];
+
+  // Activity state from backend
+  bool _isActive = false;
+  StreamSubscription<bool>? _activeStateSub;
+
+  // Set detection
+  StreamSubscription<int>? _setDetectedSub;
 
   Timer? _timer;
   Duration _elapsed = Duration.zero;
@@ -51,20 +75,85 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
   Timer? _countdownTimer;
   bool get _isCountingDown => _countdownValue > 0;
 
+  // Rest timer
+  DateTime? _lastSetCompletionTime;
+  DateTime? _lastRepTime;
+  Timer? _restCheckTimer;
+  bool _showRestWarning = false;
+
+  // Auto-detect state
+  bool _isAutoDetecting = false;
+  ArduinoService? _ownedArduinoService;
+  StreamSubscription<AutoDetectResult>? _autoDetectSub;
+  StreamSubscription<ArduinoConnectionState>? _connectionSub;
+  bool _autoDetectTriggered = false;
+
   late final AnimationController _pulseController;
   late final Animation<double> _pulseAnimation;
 
   @override
   void initState() {
     super.initState();
+
+    // Build mutable exercise list
+    if (widget.autoDetect) {
+      _exercises = [_autoDetectPlaceholder];
+      _isAutoDetecting = true;
+    } else {
+      _exercises = List.of(widget.exercises);
+    }
+
     _session = WorkoutSession(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       startTime: DateTime.now(),
     );
-    _repDetector = RepDetector(
-      mode: widget.detectionMode,
-      existingArduinoService: widget.arduinoService,
-    );
+
+    // For auto-detect, create ArduinoService and pass to RepDetector
+    if (widget.autoDetect) {
+      _ownedArduinoService = ArduinoService(wsUrl: kBackendWsUrl);
+      _repDetector = RepDetector(
+        mode: DetectionMode.arduino,
+        existingArduinoService: _ownedArduinoService,
+      );
+
+      // Listen for exercise detection result
+      _autoDetectSub = _ownedArduinoService!.exerciseDetectedStream.listen((result) {
+        if (!mounted) return;
+        final exercise = exerciseFromClassifierLabel(result.exercise);
+        setState(() {
+          _isAutoDetecting = false;
+          if (exercise != null) {
+            _exercises[0] = exercise;
+            _currentSet.exercise = exercise;
+          } else {
+            // Unknown label — use a fallback
+            final fallback = Exercise(
+              id: 'unknown',
+              name: result.exercise,
+              primaryMuscle: MuscleGroup.fullBody,
+              description: 'Auto-detected exercise',
+            );
+            _exercises[0] = fallback;
+            _currentSet.exercise = fallback;
+          }
+        });
+      });
+
+      // Listen for connection state to trigger auto-detect once connected
+      _connectionSub = _ownedArduinoService!.connectionState.listen((state) {
+        if (state == ArduinoConnectionState.connected && !_autoDetectTriggered) {
+          _autoDetectTriggered = true;
+          _ownedArduinoService!.startAutoDetect();
+        }
+      });
+
+      _ownedArduinoService!.connect();
+    } else {
+      _repDetector = RepDetector(
+        mode: widget.detectionMode,
+        existingArduinoService: null,
+      );
+    }
 
     _pulseController = AnimationController(
       vsync: this,
@@ -76,12 +165,19 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
 
     // Pre-initialize the current set so build() can reference it during countdown
     _currentSet = WorkoutSet(
-      exercise: widget.exercises[_currentExerciseIndex],
+      exercise: _exercises[_currentExerciseIndex],
       startTime: DateTime.now(),
       setNumber: 1,
     );
 
-    _startCountdown();
+    if (widget.autoDetect) {
+      // Skip countdown for auto-detect — user is already exercising
+      _countdownValue = 0;
+      _startExercise();
+      _startTimer();
+    } else {
+      _startCountdown();
+    }
   }
 
   void _startCountdown() {
@@ -107,42 +203,64 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
         _elapsed = DateTime.now().difference(_session.startTime);
       });
     });
+    _startRestCheckTimer();
+  }
+
+  void _startRestCheckTimer() {
+    _restCheckTimer = Timer.periodic(kRestCheckInterval, (_) {
+      // Use the most recent activity time (either last set completion or last rep)
+      final lastActivityTime = _lastSetCompletionTime ?? _lastRepTime;
+      if (lastActivityTime != null) {
+        final restDuration = DateTime.now().difference(lastActivityTime);
+        if (restDuration > kMaxRestDuration && !_showRestWarning) {
+          _triggerRestWarning();
+        }
+      }
+    });
+  }
+
+  void _triggerRestWarning() {
+    if (!mounted) return;
+    setState(() {
+      _showRestWarning = true;
+    });
+    // Strong vibration pattern - 500ms vibrate, 200ms pause, 500ms vibrate
+    // Pattern: [delay before start, vibrate, pause, vibrate]
+    // Intensities: max strength (255) for each vibration
+    Vibration.vibrate(
+      pattern: [0, 500, 200, 500],
+      intensities: [0, 255, 0, 255],
+    );
+    // Optionally dismiss after a few seconds
+    Future.delayed(const Duration(seconds: 4), () {
+      if (mounted) {
+        setState(() {
+          _showRestWarning = false;
+        });
+      }
+    });
   }
 
   void _startExercise() {
     _repDetector.stop();
     _repSub?.cancel();
     _speedSub?.cancel();
+    _activeStateSub?.cancel();
+    _setDetectedSub?.cancel();
     _setRepCount = 0;
-    _lastIntensity = 0;
     _speedDeviation = 0;
+    _paceHistory.clear();
+    _isActive = false;
 
     final setsForExercise = _session.sets
-        .where((s) => s.exercise == widget.exercises[_currentExerciseIndex])
+        .where((s) => s.exercise == _exercises[_currentExerciseIndex])
         .length;
-    final isFirstSetFromAutoDetect =
-        widget.initialRepCount != null && _currentExerciseIndex == 0 && setsForExercise == 0;
-
-    _setRepCount = isFirstSetFromAutoDetect ? widget.initialRepCount! : 0;
-    _lastIntensity = 0;
 
     _currentSet = WorkoutSet(
-      exercise: widget.exercises[_currentExerciseIndex],
+      exercise: _exercises[_currentExerciseIndex],
       startTime: DateTime.now(),
       setNumber: setsForExercise + 1,
     );
-
-    if (isFirstSetFromAutoDetect && widget.initialRepCount! > 0) {
-      final now = DateTime.now();
-      for (var i = 0; i < widget.initialRepCount!; i++) {
-        _currentSet.reps.add(RepData(
-          timestamp: now,
-          peakAcceleration: 0,
-          repDuration: Duration.zero,
-          intensity: 0,
-        ));
-      }
-    }
 
     _repDetector.start();
     _repSub = _repDetector.repStream.listen(_onRep);
@@ -151,58 +269,86 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
     final speed = _repDetector.speedStream;
     if (speed != null) {
       _speedSub = speed.listen((deviation) {
-        if (mounted) setState(() => _speedDeviation = deviation);
+        if (mounted) {
+          setState(() => _speedDeviation = deviation);
+          if (_isActive) {
+            _paceHistory.add(deviation);
+          }
+        }
       });
+    }
+
+    // Subscribe to active state stream (arduino mode only)
+    final activeStream = _repDetector.activeStateStream;
+    if (activeStream != null) {
+      _activeStateSub = activeStream.listen((active) {
+        if (mounted) setState(() => _isActive = active);
+      });
+    }
+
+    // Subscribe to set detection stream (arduino mode only)
+    final setStream = _repDetector.setDetectedStream;
+    if (setStream != null) {
+      _setDetectedSub = setStream.listen(_onSetBoundary);
     }
   }
 
   void _onRep(RepData rep) {
     if (!mounted) return;
-    // Debug: confirm UI is receiving reps and updating count
-    print('[flutter] UI received rep: setRepCount=${_setRepCount + 1} intensity=${rep.intensity.toStringAsFixed(2)}');
+    print('[flutter] UI received rep: setRepCount=${_setRepCount + 1}');
     setState(() {
       _setRepCount++;
-      _lastIntensity = rep.intensity;
       _currentSet.reps.add(rep);
+      // Track last rep time for rest timer
+      _lastRepTime = DateTime.now();
+      _showRestWarning = false; // Dismiss warning when user resumes activity
     });
     _pulseController.forward().then((_) {
       if (mounted) _pulseController.reverse();
     });
   }
 
-  void _nextSet() {
-    _repDetector.stop();
-    _repSub?.cancel();
-    _currentSet.endTime = DateTime.now();
-    if (_currentSet.reps.isNotEmpty) {
-      _session.sets.add(_currentSet);
-    }
-    setState(() {});
-    _startExercise();
-  }
+  void _onSetBoundary(int repCountAtBoundary) {
+    if (!mounted) return;
+    if (_currentSet.reps.isEmpty) return;
 
-  void _nextExercise() {
-    _repDetector.stop();
-    _repSub?.cancel();
+    // Save current set with pace data
     _currentSet.endTime = DateTime.now();
-    if (_currentSet.reps.isNotEmpty) {
-      _session.sets.add(_currentSet);
-    }
-    if (_currentExerciseIndex + 1 >= widget.exercises.length) {
-      _finishWorkout();
-      return;
-    }
+    _currentSet.paceDeviations.addAll(_paceHistory);
+    _session.sets.add(_currentSet);
+
+    // Track rest timer - prioritize set completion time for rest tracking between sets
+    _lastSetCompletionTime = DateTime.now();
+    _lastRepTime = null; // Clear rep time so rest tracking uses set completion
+    _showRestWarning = false;
+
+    // Clear pace history for the new set
+    _paceHistory.clear();
+
+    // Start a new set for the same exercise
+    final setsForExercise = _session.sets
+        .where((s) => s.exercise == _exercises[_currentExerciseIndex])
+        .length;
+
     setState(() {
-      _currentExerciseIndex++;
+      _currentSet = WorkoutSet(
+        exercise: _exercises[_currentExerciseIndex],
+        startTime: DateTime.now(),
+        setNumber: setsForExercise + 1,
+      );
+      _setRepCount = 0;
     });
-    _startExercise();
   }
 
   void _finishWorkout() {
     _repDetector.stop();
     _repSub?.cancel();
+    _speedSub?.cancel();
+    _activeStateSub?.cancel();
+    _setDetectedSub?.cancel();
     _timer?.cancel();
     _currentSet.endTime = DateTime.now();
+    _currentSet.paceDeviations.addAll(_paceHistory);
     if (_currentSet.reps.isNotEmpty) {
       _session.sets.add(_currentSet);
     }
@@ -250,17 +396,16 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
     _repDetector.dispose();
     _repSub?.cancel();
     _speedSub?.cancel();
+    _activeStateSub?.cancel();
+    _setDetectedSub?.cancel();
     _timer?.cancel();
     _countdownTimer?.cancel();
+    _restCheckTimer?.cancel();
     _pulseController.dispose();
-    widget.arduinoService?.dispose();
+    _autoDetectSub?.cancel();
+    _connectionSub?.cancel();
+    _ownedArduinoService?.dispose();
     super.dispose();
-  }
-
-  Color _intensityColor(double v) {
-    if (v > 0.8) return AppColors.error;
-    if (v > 0.6) return AppColors.accent;
-    return AppColors.primary;
   }
 
   String _fmt(Duration d) {
@@ -272,8 +417,8 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
 
   @override
   Widget build(BuildContext context) {
-    final exercise = widget.exercises[_currentExerciseIndex];
-    final isLast = _currentExerciseIndex >= widget.exercises.length - 1;
+    final exercise = _exercises[_currentExerciseIndex];
+    final effectiveMode = widget.autoDetect ? DetectionMode.arduino : widget.detectionMode;
 
     return PopScope(
       canPop: false,
@@ -297,20 +442,46 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            exercise.name,
-                            style: GoogleFonts.inter(
-                              fontSize: 22,
-                              fontWeight: FontWeight.w700,
-                              color: AppColors.textPrimary,
+                          // Exercise name — show detecting state or real name
+                          if (_isAutoDetecting)
+                            Row(
+                              children: [
+                                SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: AppColors.accent,
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Text(
+                                  'Detecting...',
+                                  style: GoogleFonts.inter(
+                                    fontSize: 22,
+                                    fontWeight: FontWeight.w700,
+                                    color: AppColors.accent,
+                                  ),
+                                ),
+                              ],
+                            )
+                          else
+                            Text(
+                              exercise.name,
+                              style: GoogleFonts.inter(
+                                fontSize: 22,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.textPrimary,
+                              ),
                             ),
-                          ),
                           const SizedBox(height: 2),
                           Text(
                             'Set ${_currentSet.setNumber}',
                             style: TextStyle(
                               fontSize: 15,
-                              color: exercise.primaryMuscle.color,
+                              color: _isAutoDetecting
+                                  ? AppColors.textSecondary
+                                  : exercise.primaryMuscle.color,
                               fontWeight: FontWeight.w600,
                             ),
                           ),
@@ -344,7 +515,7 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
                             ],
                           ),
                         ),
-                        if (widget.detectionMode == DetectionMode.arduino &&
+                        if (effectiveMode == DetectionMode.arduino &&
                             _repDetector.connectionState != null)
                           StreamBuilder<ArduinoConnectionState>(
                             stream: _repDetector.connectionState,
@@ -423,7 +594,7 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
 
                 const Spacer(flex: 2),
 
-                // Rep counter
+                // Rep counter (smaller)
                 ScaleTransition(
                   scale: _pulseAnimation,
                   child: Column(
@@ -431,7 +602,7 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
                       Text(
                         '$_setRepCount',
                         style: GoogleFonts.inter(
-                          fontSize: 96,
+                          fontSize: 64,
                           fontWeight: FontWeight.w800,
                           color: AppColors.textPrimary,
                           height: 1,
@@ -441,7 +612,7 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
                       Text(
                         'REPS',
                         style: GoogleFonts.inter(
-                          fontSize: 16,
+                          fontSize: 14,
                           fontWeight: FontWeight.w600,
                           color: AppColors.textTertiary,
                           letterSpacing: 4,
@@ -451,113 +622,44 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
                   ),
                 ),
 
-                const SizedBox(height: 24),
+                const SizedBox(height: 20),
 
-                // Speed / tempo guide
+                // Speed / tempo guide (bigger)
                 SpeedGuideWidget(
-                  simulate: widget.detectionMode != DetectionMode.arduino,
+                  simulate: effectiveMode != DetectionMode.arduino,
                   speedDeviation: _speedDeviation,
+                  active: effectiveMode != DetectionMode.arduino || _isActive,
+                  scale: 1.4,
                 ),
 
                 const SizedBox(height: 20),
 
-                // Intensity bar
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  child: Column(
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text('Intensity',
-                              style: TextStyle(
-                                  fontSize: 14,
-                                  color: AppColors.textSecondary)),
-                          Text(
-                            '${(_lastIntensity * 100).toInt()}%',
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w700,
-                              color: _intensityColor(_lastIntensity),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(6),
-                        child: LinearProgressIndicator(
-                          value: _lastIntensity,
-                          minHeight: 8,
-                          backgroundColor: AppColors.surfaceLight,
-                          color: _intensityColor(_lastIntensity),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-
-                const SizedBox(height: 20),
-
-                // Metrics row
-                Row(
-                  children: [
-                    _miniMetric(
-                      'Avg Intensity',
-                      '${(_currentSet.averageIntensity * 100).toInt()}%',
-                      AppColors.secondary,
-                    ),
-                    _miniMetric(
-                      'Peak',
-                      '${(_currentSet.peakIntensity * 100).toInt()}%',
-                      AppColors.accent,
-                    ),
-                    _miniMetric(
-                      'Exercise',
-                      '${_currentExerciseIndex + 1}/${widget.exercises.length}',
-                      AppColors.textSecondary,
-                    ),
-                  ],
-                ),
+                // Pace timeline (arduino mode only)
+                if (effectiveMode == DetectionMode.arduino)
+                  PaceTimeline(paceHistory: _paceHistory),
 
                 const Spacer(flex: 3),
 
-                // Controls
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: _nextSet,
-                        child: const Text('Next Set'),
+                // Finish button
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: _confirmEnd,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.accent,
+                      foregroundColor: AppColors.background,
+                      padding: const EdgeInsets.symmetric(vertical: 18),
+                    ),
+                    child: Text(
+                      'Finish Workout',
+                      style: GoogleFonts.inter(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: isLast
-                          ? ElevatedButton(
-                              onPressed: _finishWorkout,
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: AppColors.accent,
-                                foregroundColor: AppColors.background,
-                              ),
-                              child: const Text('Finish'),
-                            )
-                          : ElevatedButton(
-                              onPressed: _nextExercise,
-                              child: const Text('Next Exercise'),
-                            ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                TextButton(
-                  onPressed: _confirmEnd,
-                  child: const Text(
-                    'End Workout',
-                    style: TextStyle(color: AppColors.error, fontSize: 14),
                   ),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 16),
               ],
             ),
           ),
@@ -580,32 +682,79 @@ class _ActiveWorkoutScreenState extends State<ActiveWorkoutScreen>
                   ),
                 ),
               ),
+            // Rest warning banner
+            if (_showRestWarning)
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: SafeArea(
+                  child: Container(
+                    margin: const EdgeInsets.all(20),
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: AppColors.accent,
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: [
+                        BoxShadow(
+                          color: AppColors.accent.withValues(alpha: 0.3),
+                          blurRadius: 12,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.warning_rounded,
+                          color: AppColors.background,
+                          size: 24,
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Long Rest Break',
+                                style: GoogleFonts.inter(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppColors.background,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                'Time to get back to work!',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: AppColors.background.withValues(alpha: 0.9),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        IconButton(
+                          icon: Icon(
+                            Icons.close,
+                            color: AppColors.background,
+                            size: 20,
+                          ),
+                          onPressed: () {
+                            setState(() {
+                              _showRestWarning = false;
+                            });
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
           ],
         ),
       ),
     );
   }
 
-  Widget _miniMetric(String label, String value, Color color) {
-    return Expanded(
-      child: Column(
-        children: [
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w700,
-              color: color,
-            ),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            label,
-            style:
-                const TextStyle(fontSize: 12, color: AppColors.textTertiary),
-          ),
-        ],
-      ),
-    );
-  }
 }

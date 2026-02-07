@@ -41,6 +41,12 @@ class RepDetector {
   /// Speed deviation stream from backend (arduino mode only).
   Stream<double>? get speedStream => _arduinoService?.speedStream;
 
+  /// Set boundary stream from backend (arduino mode only).
+  Stream<int>? get setDetectedStream => _arduinoService?.setDetectedStream;
+
+  /// Activity state stream from backend (arduino mode only).
+  Stream<bool>? get activeStateStream => _arduinoService?.activeStateStream;
+
   RepDetector({
     this.mode = DetectionMode.simulation,
     this.wsUrl = kBackendWsUrl,

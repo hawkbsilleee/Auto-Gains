@@ -5,7 +5,6 @@ import '../models/exercise.dart';
 import '../data/exercise_library.dart';
 import '../services/rep_detector.dart';
 import 'active_workout_screen.dart';
-import 'workout_detection_screen.dart';
 
 class LibraryScreen extends StatefulWidget {
   const LibraryScreen({super.key});
@@ -114,8 +113,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
               setState(() {
                 _autoDetectSelected = false;
                 if (isSelected) {
-                  _selected.remove(exercise);
+                  _selected.clear();
                 } else {
+                  _selected.clear();
                   _selected.add(exercise);
                 }
               });
@@ -304,10 +304,13 @@ class _LibraryScreenState extends State<LibraryScreen> {
             width: double.infinity,
             child: ElevatedButton(
               onPressed: () {
-                Navigator.push(
+                Navigator.pushReplacement(
                   context,
                   MaterialPageRoute(
-                    builder: (_) => const WorkoutDetectionScreen(),
+                    builder: (_) => const ActiveWorkoutScreen(
+                      exercises: [],
+                      autoDetect: true,
+                    ),
                   ),
                 );
               },
@@ -369,7 +372,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                   );
                 },
                 child: Text(
-                  'Begin Workout  (${_selected.length} exercise${_selected.length > 1 ? 's' : ''})',
+                  'Begin Workout',
                   style: GoogleFonts.inter(
                     fontSize: 16,
                     fontWeight: FontWeight.w600,

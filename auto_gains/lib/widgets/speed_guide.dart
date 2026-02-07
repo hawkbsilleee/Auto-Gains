@@ -11,10 +11,18 @@ class SpeedGuideWidget extends StatefulWidget {
   /// When true, generates fake oscillating speed data internally.
   final bool simulate;
 
+  /// When false, ball sits at center with no physics (user not exercising).
+  final bool active;
+
+  /// Scale factor for bowl height and ball radius.
+  final double scale;
+
   const SpeedGuideWidget({
     super.key,
     this.speedDeviation = 0.0,
     this.simulate = true,
+    this.active = true,
+    this.scale = 1.0,
   });
 
   @override
@@ -41,6 +49,7 @@ class _SpeedGuideWidgetState extends State<SpeedGuideWidget>
   }
 
   double _getSpeedDeviation(Duration elapsed) {
+    if (!widget.active) return 0.0; // Ball sits still at center
     if (widget.simulate) {
       final t = elapsed.inMilliseconds / 1000.0;
       // Layered sine waves for natural-feeling oscillation
@@ -83,6 +92,7 @@ class _SpeedGuideWidgetState extends State<SpeedGuideWidget>
   }
 
   String _statusText() {
+    if (!widget.active && !widget.simulate) return '--';
     final abs = _position.abs();
     if (abs < 0.12) return 'Perfect';
     if (abs < 0.35) return 'Good';
@@ -123,9 +133,12 @@ class _SpeedGuideWidgetState extends State<SpeedGuideWidget>
           ),
           const SizedBox(height: 10),
           SizedBox(
-            height: 60,
+            height: 60 * widget.scale,
             child: CustomPaint(
-              painter: _TrackPainter(ballPosition: _position),
+              painter: _TrackPainter(
+                ballPosition: _position,
+                ballRadiusOverride: 11.0 * widget.scale,
+              ),
               size: Size.infinite,
             ),
           ),
@@ -165,8 +178,9 @@ class _SpeedGuideWidgetState extends State<SpeedGuideWidget>
 
 class _TrackPainter extends CustomPainter {
   final double ballPosition; // -1 to 1
+  final double ballRadiusOverride;
 
-  _TrackPainter({required this.ballPosition});
+  _TrackPainter({required this.ballPosition, this.ballRadiusOverride = 11.0});
 
   /// Parabolic bowl in screen coords.
   /// Center (p=0) is the lowest point (largest Y).
@@ -188,7 +202,7 @@ class _TrackPainter extends CustomPainter {
 
     final bowlBaseY = h * 0.82; // bottom of bowl
     final bowlDepth = h * 0.52; // how far edges rise
-    final ballRadius = 11.0;
+    final ballRadius = ballRadiusOverride;
 
     // -- Track fill (subtle gradient under the curve) --
     final fillPath = Path();

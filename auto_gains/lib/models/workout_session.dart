@@ -15,8 +15,9 @@ class RepData {
 }
 
 class WorkoutSet {
-  final Exercise exercise;
+  Exercise exercise;
   final List<RepData> reps = [];
+  final List<double> paceDeviations = [];
   final DateTime startTime;
   DateTime? endTime;
   final int setNumber;
@@ -37,6 +38,12 @@ class WorkoutSet {
   double get peakIntensity {
     if (reps.isEmpty) return 0;
     return reps.map((r) => r.intensity).reduce((a, b) => a > b ? a : b);
+  }
+
+  double get goodPacePercent {
+    if (paceDeviations.isEmpty) return 0.0;
+    final good = paceDeviations.where((d) => d.abs() < 0.12).length;
+    return good / paceDeviations.length;
   }
 
   double get fatigueIndex {
@@ -86,5 +93,17 @@ class WorkoutSession {
       map[set.exercise.name] = (map[set.exercise.name] ?? 0) + set.reps.length;
     }
     return map;
+  }
+
+  /// All pace deviation samples across every set.
+  List<double> get allPaceDeviations =>
+      sets.expand((s) => s.paceDeviations).toList();
+
+  /// Fraction of all pace samples that were "good" (abs deviation < 0.12).
+  double get overallGoodPacePercent {
+    final all = allPaceDeviations;
+    if (all.isEmpty) return 0.0;
+    final good = all.where((d) => d.abs() < 0.12).length;
+    return good / all.length;
   }
 }

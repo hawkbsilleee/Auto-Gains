@@ -152,7 +152,7 @@ class RepServer:
             elif (i + 1) % 500 == 0:
                 print(f"[mock] Replay progress: {i + 1}/{len(samples)} samples")
             loop.call_soon_threadsafe(self.sample_queue.put_nowait, sample)
-            time.sleep(0.01)  # ~100Hz, matching typical Arduino rate
+            time.sleep(0.15)  # ~100Hz, matching typical Arduino rate
 
         print("[mock] Replay complete")
 
@@ -243,8 +243,18 @@ class RepServer:
                     "type": "speed",
                     "speed_deviation": round(result.get("speed_deviation", 0.0), 3),
                     "phase": result.get("phase", "concentric"),
+                    "active": result.get("is_active", False),
                 })
                 await self._broadcast(speed_msg)
+
+            # Set boundary detection
+            if result.get("set_boundary", False):
+                boundary_msg = json.dumps({
+                    "type": "set_boundary",
+                    "rep_count": result["rep_count"],
+                })
+                print(f"[backend] Set boundary detected at sample {self.sample_idx}, rep_count={result['rep_count']}")
+                await self._broadcast(boundary_msg)
 
             # Periodic status heartbeat every 50 samples
             if self.sample_idx % 50 == 0:

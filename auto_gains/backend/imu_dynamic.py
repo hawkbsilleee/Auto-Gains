@@ -283,6 +283,17 @@ class StreamingPipeline:
         self.optimal_concentric_rate = 0.15
         self.optimal_eccentric_rate = 0.10
 
+        # Activity detection for automatic set boundaries
+        self._activity_buffer = []          # Rolling window of |PC1 derivative|
+        self._activity_window = 100         # ~1 sec at 100Hz
+        self._activity_threshold = 0.02     # Min variance to consider "active"
+        self._is_active = False
+        self._was_active = False
+        self._idle_counter = 0
+        self._idle_threshold = 500          # 5 sec at 100Hz -> set boundary
+        self._set_boundary_detected = False
+        self._ever_active = False           # Prevents false boundary at start
+
         # Store raw + intermediate signals for visualization
         self.raw_history = []
         self.pc1_raw_history = []
@@ -343,6 +354,32 @@ class StreamingPipeline:
         result['speed_deviation'] = speed_deviation
         result['phase'] = phase
 
+        # Step 5: Activity detection for automatic set boundaries
+        self._set_boundary_detected = False
+        if self.prev_smooth is not None and len(self.pc1_smooth_history) >= 2:
+            abs_derivative = abs(self.pc1_smooth_history[-1] - self.pc1_smooth_history[-2])
+            self._activity_buffer.append(abs_derivative)
+            if len(self._activity_buffer) > self._activity_window:
+                self._activity_buffer.pop(0)
+
+            if len(self._activity_buffer) >= 20:
+                activity_level = np.var(self._activity_buffer)
+                self._was_active = self._is_active
+                self._is_active = bool(activity_level > self._activity_threshold)
+
+                if self._is_active:
+                    self._ever_active = True
+                    self._idle_counter = 0
+                else:
+                    self._idle_counter += 1
+
+                if (self._idle_counter == self._idle_threshold and
+                        self._ever_active):
+                    self._set_boundary_detected = True
+
+        result['is_active'] = self._is_active
+        result['set_boundary'] = self._set_boundary_detected
+
         return result
 
     def get_raw_data(self):
@@ -368,7 +405,7 @@ def load_imu_data(filepath):
     return data
 
 
-def simulate_streaming(raw_data, pipeline, delay_ms=0, verbose=True):
+def simulate_streaming(raw_data, pipeline, delay_ms=50, verbose=True):
     """
     Simulate real-time streaming through the full pipeline.
 

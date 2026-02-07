@@ -19,9 +19,10 @@ class WorkoutSummaryScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final repsMap = session.repsPerExercise;
-    final exerciseNames = repsMap.keys.toList();
-    final allReps = session.sets.expand((s) => s.reps).toList();
+    final allPace = session.allPaceDeviations;
+    final hasPaceData = allPace.isNotEmpty;
+    final exerciseName =
+        session.sets.isNotEmpty ? session.sets.first.exercise.name : 'Workout';
 
     return PopScope(
       canPop: false,
@@ -31,33 +32,30 @@ class WorkoutSummaryScreen extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 20),
             children: [
               const SizedBox(height: 24),
-              _buildHeader(),
-              const SizedBox(height: 24),
-              _buildMetricsGrid(),
-              const SizedBox(height: 24),
-              if (exerciseNames.isNotEmpty) ...[
-                _sectionTitle('Reps per Exercise'),
-                const SizedBox(height: 12),
-                _buildRepsChart(exerciseNames, repsMap),
-                const SizedBox(height: 24),
-              ],
-              if (allReps.length > 1) ...[
-                _sectionTitle('Intensity Over Time'),
-                const SizedBox(height: 12),
-                _buildIntensityChart(allReps),
-                const SizedBox(height: 24),
-              ],
+              _buildHeader(exerciseName),
+              const SizedBox(height: 28),
+              _buildTopMetrics(hasPaceData),
+              const SizedBox(height: 28),
               if (session.sets.isNotEmpty) ...[
-                _sectionTitle('Set Breakdown'),
+                _sectionTitle('Sets'),
                 const SizedBox(height: 12),
-                ...session.sets.map(_buildSetCard),
-                const SizedBox(height: 16),
+                ...session.sets.map(_buildSetRow),
+                const SizedBox(height: 24),
+              ],
+              if (hasPaceData) ...[
+                _sectionTitle('Pace Over Time'),
+                const SizedBox(height: 12),
+                _buildPaceChart(allPace),
+                const SizedBox(height: 28),
               ],
               Padding(
                 padding: const EdgeInsets.only(bottom: 32),
-                child: ElevatedButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Done'),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('Done'),
+                  ),
                 ),
               ),
             ],
@@ -67,17 +65,18 @@ class WorkoutSummaryScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildHeader() {
+  Widget _buildHeader(String exerciseName) {
     return Column(
       children: [
         Container(
           width: 64,
           height: 64,
           decoration: BoxDecoration(
-            color: AppColors.primary.withValues(alpha:0.15),
+            color: AppColors.primary.withValues(alpha: 0.15),
             shape: BoxShape.circle,
           ),
-          child: const Icon(Icons.check_rounded, color: AppColors.primary, size: 36),
+          child: const Icon(Icons.check_rounded,
+              color: AppColors.primary, size: 36),
         ),
         const SizedBox(height: 16),
         Text(
@@ -90,58 +89,52 @@ class WorkoutSummaryScreen extends StatelessWidget {
         ),
         const SizedBox(height: 6),
         Text(
+          exerciseName,
+          style: GoogleFonts.inter(
+            fontSize: 17,
+            fontWeight: FontWeight.w600,
+            color: AppColors.textSecondary,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
           _fmt(session.duration),
-          style: const TextStyle(fontSize: 16, color: AppColors.textSecondary),
+          style: const TextStyle(fontSize: 15, color: AppColors.textTertiary),
         ),
       ],
     );
   }
 
-  Widget _buildMetricsGrid() {
-    return Column(
+  Widget _buildTopMetrics(bool hasPaceData) {
+    return Row(
       children: [
-        Row(
-          children: [
-            Expanded(
-              child: MetricCard(
-                label: 'Total Reps',
-                value: '${session.totalReps}',
-                icon: Icons.repeat,
-                color: AppColors.primary,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: MetricCard(
-                label: 'Total Sets',
-                value: '${session.totalSets}',
-                icon: Icons.layers,
-                color: AppColors.secondary,
-              ),
-            ),
-          ],
+        Expanded(
+          child: MetricCard(
+            label: 'Total Sets',
+            value: '${session.totalSets}',
+            icon: Icons.layers,
+            color: AppColors.secondary,
+          ),
         ),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            Expanded(
-              child: MetricCard(
-                label: 'Avg Intensity',
-                value: '${(session.averageIntensity * 100).toInt()}%',
-                icon: Icons.bolt,
-                color: AppColors.accent,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: MetricCard(
-                label: 'Fatigue',
-                value: '${(session.overallFatigue * 100).toInt()}%',
-                icon: Icons.trending_down,
-                color: AppColors.error,
-              ),
-            ),
-          ],
+        const SizedBox(width: 10),
+        Expanded(
+          child: MetricCard(
+            label: 'Total Reps',
+            value: '${session.totalReps}',
+            icon: Icons.repeat,
+            color: AppColors.primary,
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: MetricCard(
+            label: 'Good Pace',
+            value: hasPaceData
+                ? '${(session.overallGoodPacePercent * 100).toInt()}%'
+                : '--',
+            icon: Icons.speed,
+            color: AppColors.accent,
+          ),
         ),
       ],
     );
@@ -158,120 +151,20 @@ class WorkoutSummaryScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildRepsChart(List<String> names, Map<String, int> repsMap) {
-    final maxReps = repsMap.values.reduce((a, b) => a > b ? a : b).toDouble();
-    final colors = [
-      AppColors.primary,
-      AppColors.secondary,
-      AppColors.accent,
-      const Color(0xFFEC4899),
-      const Color(0xFF3B82F6),
-      const Color(0xFF10B981),
-    ];
+  Widget _buildSetRow(WorkoutSet set) {
+    final hasPace = set.paceDeviations.isNotEmpty;
+    final pacePercent = set.goodPacePercent;
+    final paceColor = !hasPace
+        ? AppColors.textTertiary
+        : pacePercent > 0.6
+            ? AppColors.primary
+            : pacePercent > 0.3
+                ? AppColors.accent
+                : AppColors.error;
 
-    return Container(
-      height: 200,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.border, width: 0.5),
-      ),
-      child: BarChart(
-        BarChartData(
-          alignment: BarChartAlignment.spaceAround,
-          maxY: maxReps + 2,
-          barTouchData: BarTouchData(enabled: false),
-          titlesData: FlTitlesData(
-            show: true,
-            bottomTitles: AxisTitles(
-              sideTitles: SideTitles(
-                showTitles: true,
-                getTitlesWidget: (value, _) {
-                  final idx = value.toInt();
-                  if (idx >= names.length) return const SizedBox.shrink();
-                  final name = names[idx];
-                  return Padding(
-                    padding: const EdgeInsets.only(top: 6),
-                    child: Text(
-                      name.length > 8 ? '${name.substring(0, 7)}.' : name,
-                      style: const TextStyle(
-                          fontSize: 10, color: AppColors.textTertiary),
-                    ),
-                  );
-                },
-              ),
-            ),
-            leftTitles:
-                const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-            topTitles:
-                const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-            rightTitles:
-                const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-          ),
-          gridData: const FlGridData(show: false),
-          borderData: FlBorderData(show: false),
-          barGroups: [
-            for (int i = 0; i < names.length; i++)
-              BarChartGroupData(
-                x: i,
-                barRods: [
-                  BarChartRodData(
-                    toY: repsMap[names[i]]!.toDouble(),
-                    color: colors[i % colors.length],
-                    width: 22,
-                    borderRadius:
-                        const BorderRadius.vertical(top: Radius.circular(6)),
-                  ),
-                ],
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildIntensityChart(List<RepData> reps) {
-    return Container(
-      height: 180,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.border, width: 0.5),
-      ),
-      child: LineChart(
-        LineChartData(
-          minY: 0,
-          maxY: 1,
-          lineBarsData: [
-            LineChartBarData(
-              spots: [
-                for (int i = 0; i < reps.length; i++)
-                  FlSpot(i.toDouble(), reps[i].intensity),
-              ],
-              isCurved: true,
-              color: AppColors.secondary,
-              barWidth: 2.5,
-              dotData: const FlDotData(show: false),
-              belowBarData: BarAreaData(
-                show: true,
-                color: AppColors.secondary.withValues(alpha:0.1),
-              ),
-            ),
-          ],
-          titlesData: const FlTitlesData(show: false),
-          gridData: const FlGridData(show: false),
-          borderData: FlBorderData(show: false),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSetCard(WorkoutSet set) {
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       decoration: BoxDecoration(
         color: AppColors.surface,
         borderRadius: BorderRadius.circular(12),
@@ -279,64 +172,179 @@ class WorkoutSummaryScreen extends StatelessWidget {
       ),
       child: Row(
         children: [
+          // Set number badge
           Container(
             width: 36,
             height: 36,
             decoration: BoxDecoration(
-              color: set.exercise.primaryMuscle.color.withValues(alpha:0.15),
+              color: AppColors.secondary.withValues(alpha: 0.15),
               borderRadius: BorderRadius.circular(8),
             ),
             child: Center(
               child: Text(
-                'S${set.setNumber}',
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                  color: set.exercise.primaryMuscle.color,
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  set.exercise.name,
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.textPrimary,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  '${set.reps.length} reps',
-                  style: const TextStyle(
-                      fontSize: 13, color: AppColors.textTertiary),
-                ),
-              ],
-            ),
-          ),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Text(
-                '${(set.averageIntensity * 100).toInt()}%',
+                '${set.setNumber}',
                 style: const TextStyle(
                   fontSize: 15,
                   fontWeight: FontWeight.w700,
                   color: AppColors.secondary,
                 ),
               ),
+            ),
+          ),
+          const SizedBox(width: 14),
+          // Reps
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${set.reps.length} reps',
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // Good pace %
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                hasPace ? '${(pacePercent * 100).toInt()}%' : '--',
+                style: TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w700,
+                  color: paceColor,
+                ),
+              ),
               const Text(
-                'avg intensity',
-                style: TextStyle(fontSize: 11, color: AppColors.textTertiary),
+                'good pace',
+                style:
+                    TextStyle(fontSize: 11, color: AppColors.textTertiary),
               ),
             ],
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildPaceChart(List<double> paceData) {
+    return Container(
+      height: 200,
+      padding: const EdgeInsets.fromLTRB(12, 16, 16, 12),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.border, width: 0.5),
+      ),
+      child: LineChart(
+        LineChartData(
+          minY: -1,
+          maxY: 1,
+          clipData: const FlClipData.all(),
+          lineBarsData: [
+            // Green zone fill (good pace band)
+            LineChartBarData(
+              spots: [
+                const FlSpot(0, 0.12),
+                FlSpot(paceData.length.toDouble() - 1, 0.12),
+              ],
+              isCurved: false,
+              color: Colors.transparent,
+              barWidth: 0,
+              dotData: const FlDotData(show: false),
+              belowBarData: BarAreaData(
+                show: true,
+                color: AppColors.primary.withValues(alpha: 0.07),
+                cutOffY: -0.12,
+                applyCutOffY: true,
+              ),
+            ),
+            // Actual pace line
+            LineChartBarData(
+              spots: [
+                for (int i = 0; i < paceData.length; i++)
+                  FlSpot(i.toDouble(), paceData[i].clamp(-1.0, 1.0)),
+              ],
+              isCurved: true,
+              curveSmoothness: 0.2,
+              color: AppColors.accent,
+              barWidth: 2,
+              dotData: const FlDotData(show: false),
+              belowBarData: BarAreaData(
+                show: true,
+                color: AppColors.accent.withValues(alpha: 0.08),
+              ),
+            ),
+          ],
+          titlesData: FlTitlesData(
+            leftTitles: AxisTitles(
+              sideTitles: SideTitles(
+                showTitles: true,
+                reservedSize: 32,
+                interval: 0.5,
+                getTitlesWidget: (value, _) {
+                  if (value == 0) {
+                    return const Text('0',
+                        style: TextStyle(
+                            fontSize: 10, color: AppColors.textTertiary));
+                  }
+                  if (value == 0.5 || value == -0.5) {
+                    return Text(
+                      value > 0 ? 'Fast' : 'Slow',
+                      style: const TextStyle(
+                          fontSize: 9, color: AppColors.textTertiary),
+                    );
+                  }
+                  return const SizedBox.shrink();
+                },
+              ),
+            ),
+            bottomTitles:
+                const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+            topTitles:
+                const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+            rightTitles:
+                const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          ),
+          gridData: FlGridData(
+            show: true,
+            drawVerticalLine: false,
+            horizontalInterval: 0.5,
+            getDrawingHorizontalLine: (value) => FlLine(
+              color: AppColors.border.withValues(alpha: 0.4),
+              strokeWidth: 0.5,
+            ),
+          ),
+          borderData: FlBorderData(show: false),
+          extraLinesData: ExtraLinesData(
+            horizontalLines: [
+              // Zero line
+              HorizontalLine(
+                y: 0,
+                color: AppColors.textTertiary.withValues(alpha: 0.3),
+                strokeWidth: 1,
+              ),
+              // Good zone boundaries
+              HorizontalLine(
+                y: 0.12,
+                color: AppColors.primary.withValues(alpha: 0.3),
+                strokeWidth: 0.5,
+                dashArray: [4, 4],
+              ),
+              HorizontalLine(
+                y: -0.12,
+                color: AppColors.primary.withValues(alpha: 0.3),
+                strokeWidth: 0.5,
+                dashArray: [4, 4],
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

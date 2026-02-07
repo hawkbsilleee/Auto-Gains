@@ -28,6 +28,8 @@ class ArduinoService {
   final _connectionStateController =
       StreamController<ArduinoConnectionState>.broadcast();
   final _exerciseDetectedController = StreamController<AutoDetectResult>.broadcast();
+  final _setBoundaryController = StreamController<int>.broadcast();
+  final _activeStateController = StreamController<bool>.broadcast();
 
   Stream<RepData> get repStream => _repController.stream;
   Stream<double> get speedStream => _speedController.stream;
@@ -36,6 +38,10 @@ class ArduinoService {
   /// Fired once when backend sends exercise_detected (exercise label + rep count so far).
   Stream<AutoDetectResult> get exerciseDetectedStream =>
       _exerciseDetectedController.stream;
+  /// Fires when backend detects a set boundary (5s idle after activity).
+  Stream<int> get setDetectedStream => _setBoundaryController.stream;
+  /// Fires with each speed update, indicating whether user is actively moving.
+  Stream<bool> get activeStateStream => _activeStateController.stream;
 
   ArduinoConnectionState _currentState = ArduinoConnectionState.disconnected;
   ArduinoConnectionState get currentState => _currentState;
@@ -110,6 +116,10 @@ class ArduinoService {
           if (!_speedController.isClosed) {
             _speedController.add(deviation);
           }
+          final active = data['active'] as bool? ?? false;
+          if (!_activeStateController.isClosed) {
+            _activeStateController.add(active);
+          }
           break;
 
         case 'status':
@@ -128,6 +138,13 @@ class ArduinoService {
               exercise: exercise,
               repCount: repCount,
             ));
+          }
+          break;
+
+        case 'set_boundary':
+          final repCount = (data['rep_count'] as num?)?.toInt() ?? 0;
+          if (!_setBoundaryController.isClosed) {
+            _setBoundaryController.add(repCount);
           }
           break;
 
@@ -187,5 +204,7 @@ class ArduinoService {
     _speedController.close();
     _connectionStateController.close();
     _exerciseDetectedController.close();
+    _setBoundaryController.close();
+    _activeStateController.close();
   }
 }

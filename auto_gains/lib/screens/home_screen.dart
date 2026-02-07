@@ -14,6 +14,26 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  @override
+  void initState() {
+    super.initState();
+    // Listen to workout store changes
+    WorkoutStore.instance.addListener(_onStoreChanged);
+  }
+
+  @override
+  void dispose() {
+    WorkoutStore.instance.removeListener(_onStoreChanged);
+    super.dispose();
+  }
+
+  void _onStoreChanged() {
+    // Rebuild when store data changes
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
   String get _greeting {
     final hour = DateTime.now().hour;
     if (hour < 12) return 'Good morning';
@@ -24,6 +44,11 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final store = WorkoutStore.instance;
+    // Show all sessions with at least one set
+    final validSessions = store.sessions.where((session) {
+      return session.sets.isNotEmpty;
+    }).toList();
+
     return Scaffold(
       body: SafeArea(
         child: Padding(
@@ -50,9 +75,9 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               const SizedBox(height: 12),
               Expanded(
-                child: store.sessions.isEmpty
+                child: validSessions.isEmpty
                     ? _buildEmptyState()
-                    : _buildWorkoutList(store),
+                    : _buildWorkoutList(validSessions),
               ),
             ],
           ),
@@ -69,7 +94,7 @@ class _HomeScreenState extends State<HomeScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'AUTO GAINS',
+              'AutoGains',
               style: GoogleFonts.inter(
                 fontSize: 28,
                 fontWeight: FontWeight.w800,
@@ -122,6 +147,15 @@ class _HomeScreenState extends State<HomeScreen> {
             value: '${store.totalRepsAllTime}',
             icon: Icons.repeat,
             color: AppColors.secondary,
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: MetricCard(
+            label: 'Total Sets',
+            value: '${store.totalSetsAllTime}',
+            icon: Icons.layers,
+            color: AppColors.accent,
           ),
         ),
       ],
@@ -216,7 +250,7 @@ class _HomeScreenState extends State<HomeScreen> {
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 40),
             child: Text(
-              'Start a workout and Auto Gains will automatically track your reps using motion sensors',
+              'Start a workout and AutoGains will automatically track your reps using motion sensors',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 14, color: AppColors.textTertiary),
             ),
@@ -227,12 +261,12 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildWorkoutList(WorkoutStore store) {
+  Widget _buildWorkoutList(List<WorkoutSession> sessions) {
     return ListView.separated(
-      itemCount: store.sessions.length,
+      itemCount: sessions.length,
       separatorBuilder: (_, _) => const SizedBox(height: 10),
       itemBuilder: (context, index) {
-        final session = store.sessions[index];
+        final session = sessions[index];
         return _WorkoutHistoryCard(session: session);
       },
     );
@@ -246,7 +280,14 @@ class _WorkoutHistoryCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final exerciseNames = session.exercises.map((e) => e.name).join(', ');
+    // Filter out placeholder exercises from display
+    final validExercises = session.exercises
+        .where((e) => e.id != 'auto_detect' && e.name != 'Detecting...')
+        .toList();
+    // If no valid exercises, show a placeholder text
+    final exerciseNames = validExercises.isEmpty
+        ? 'Workout'
+        : validExercises.map((e) => e.name).join(', ');
     final duration = session.duration;
     final mins = duration.inMinutes;
 
@@ -301,14 +342,9 @@ class _WorkoutHistoryCard extends StatelessWidget {
           const SizedBox(height: 10),
           Row(
             children: [
-              _statChip(Icons.repeat, '${session.totalReps} reps'),
-              const SizedBox(width: 16),
               _statChip(Icons.layers, '${session.totalSets} sets'),
               const SizedBox(width: 16),
-              _statChip(
-                Icons.bolt,
-                '${(session.averageIntensity * 100).toInt()}%',
-              ),
+              _statChip(Icons.repeat, '${session.totalReps} reps'),
             ],
           ),
         ],
