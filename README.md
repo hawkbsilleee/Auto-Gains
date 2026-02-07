@@ -12,7 +12,7 @@ Auto Gains is a mobile app that connects to a wearable IMU (accelerometer) via a
 
 </td>
 <td align="right">
-<img src="AutoGainsLogo2.png" alt="Auto Gains logo" width="500" style="border-radius: 16px; margin-top: 50px;" />
+<img src="autogainslogo2.png" alt="Auto Gains logo" width="500" style="border-radius: 16px; margin-top: 50px;" />
 </td>
 </tr>
 </table>
